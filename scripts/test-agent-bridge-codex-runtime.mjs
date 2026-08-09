@@ -47,6 +47,10 @@ assert.throws(() => normalizeDeviceCodeLogin({
   userCode: 'TUNA-CAD1',
 }), /untrusted/);
 assert.throws(() => createCadApprovalOutcomePrompt({ proposalId: 'bad\nproposal', decision: 'accept' }), /Invalid TunaCAD CAD proposal ID/);
+assert.match(
+  createCadApprovalOutcomePrompt({ proposalId: 'cadprop_30000000-0000-4000-8000-000000000033', decision: 'cancel' }),
+  /user replacement request.*new fully validated replacement proposal/i,
+);
 let launchOptions;
 const adapter = new CodexAppServerAdapter({
   pairing,

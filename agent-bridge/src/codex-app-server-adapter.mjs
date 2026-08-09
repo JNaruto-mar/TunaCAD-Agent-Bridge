@@ -60,7 +60,7 @@ export class CodexAppServerAdapter extends EventEmitter {
       const initialized = await client.start({
         name: 'tunacad_agent_bridge',
         title: 'TunaCAD Agent Bridge',
-        version: '0.2.0',
+        version: '0.2.1',
       });
       const accountResult = await client.request('account/read', { refreshToken: false });
       const configResult = await client.request('config/read', { includeLayers: false });
@@ -336,6 +336,7 @@ export function createCadApprovalOutcomePrompt({ proposalId, decision }) {
     'Authoritative TunaCAD browser event.',
     `CAD proposal ${proposalId} was ${outcome} by the user inside TunaCAD.`,
     `Call cad_get_staged_plan with proposalId "${proposalId}" to read its authoritative status and execution report.`,
+    'If its status detail contains a user replacement request, follow that instruction, inspect current state again, and call cad_stage_plan with a new fully validated replacement proposal.',
     'Do not call cad_execute_plan or attempt to approve the proposal yourself.',
     'Briefly report the result in this same TunaCAD conversation, including objective validation results when execution succeeded.',
   ].join(' ');
