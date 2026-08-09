@@ -7,6 +7,7 @@ import { RelayConnectionSupervisor } from '../agent-bridge/src/relay-connection-
 import { FileCursorStore } from '../agent-bridge/src/cursor-store.mjs';
 import { isRelaySocketStale, nextRelayHeartbeatAlarm } from '../src/aiAgent/relayHeartbeat.mjs';
 import { createRelayControlMessage, parseRelayControlMessage } from '../src/aiAgent/relayControl.mjs';
+import { createAgentBridgeEnvelope } from '../src/aiAgent/bridgeProtocol.mjs';
 
 class FakeSocket extends EventEmitter {
   constructor() {
@@ -133,6 +134,17 @@ try {
     const [resumed] = await resumedConnection;
     assert.equal(resumed.resumed, true);
     assert.equal(adapterStarts, 1, 'Ordinary relay reconnect must preserve the Codex process.');
+    sockets[1].emit('message', Buffer.from(JSON.stringify(createAgentBridgeEnvelope({
+      type: 'session.resume',
+      sessionId,
+      sequence: 4,
+      payload: {
+        lastAcceptedSequence: 6,
+        supportedProtocols: ['tunacad.agent-bridge/1'],
+        client: { name: 'tunacad-browser', version: '0.1.0', platform: 'test' },
+      },
+    }))));
+    await waitFor(() => sockets[1].messages().some((message) => message.type === 'bridge.ready'));
     assert.ok(sockets[1].messages().some((message) => message.type === 'bridge.ready'));
 
     const activeSocket = sockets[1];

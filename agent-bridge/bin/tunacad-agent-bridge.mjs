@@ -5,6 +5,7 @@ import {
   exchangePairingCode,
 } from '../src/relay-client.mjs';
 import { RelayConnectionSupervisor } from '../src/relay-connection-supervisor.mjs';
+import { AGENT_BRIDGE_TIMING_POLICY } from '../../src/aiAgent/bridgeCompatibility.mjs';
 
 const args = parseArguments(process.argv.slice(2));
 if (args.command !== 'connect' || !args.origin || !args.session) {
@@ -24,7 +25,7 @@ try {
 let heartbeatTimer;
 const supervisor = new RelayConnectionSupervisor({ pairing });
 supervisor.on('reconnecting', ({ attempt, delayMs }) => {
-  stdout.write(`TunaCAD relay reconnect ${attempt}/5 in ${delayMs} ms.\n`);
+  stdout.write(`TunaCAD relay reconnect ${attempt}/${AGENT_BRIDGE_TIMING_POLICY.reconnectDelaysMs.length} in ${delayMs} ms.\n`);
 });
 supervisor.on('rotationCommitted', () => stdout.write('TunaCAD session credentials rotated securely.\n'));
 supervisor.on('failure', (error) => reportFatal(error instanceof Error ? error.message : String(error)));

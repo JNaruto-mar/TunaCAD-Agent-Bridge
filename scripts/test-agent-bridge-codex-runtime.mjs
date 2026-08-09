@@ -106,6 +106,10 @@ try {
   const completed = await waitForSent(socket, (message) => message.type === 'turn.completed');
   assert.equal(completed.payload.status, 'completed');
   assert.ok(socket.types().includes('chat.assistant_delta'));
+  assert.deepEqual(
+    await adapter.steerTurn('thread:mock', 'turn:mock', 'Focus on the requested validation.'),
+    { turnId: 'turn:mock' },
+  );
 
   await runtime.handleBrowserMessage(browserMessage('chat.user_message', {
     threadId: 'thread:mock',
@@ -137,6 +141,28 @@ try {
     /replay rejected/,
   );
   assert.equal(socket.sent.join('').includes(pairing.agentToken), false);
+
+  const lastAcceptedSequence = socket.messages().at(-1).sequence;
+  socket.readyState = 3;
+  adapter.emit('event', {
+    type: 'run.phase_changed',
+    payload: {
+      threadId: 'thread:mock', turnId: 'turn:offline', phase: 'planning',
+      label: 'Buffered while the relay is offline', detail: 'Replay after reconnect',
+    },
+  });
+  const replacementSocket = new FakeRelaySocket();
+  runtime.replaceSocket(replacementSocket);
+  await runtime.handleBrowserMessage(browserMessage('session.resume', {
+    lastAcceptedSequence,
+    supportedProtocols: ['tunacad.agent-bridge/1'],
+    client: { name: 'tunacad-browser', version: '0.1.0', platform: 'test' },
+  }));
+  assert.equal(
+    replacementSocket.messages().filter((message) => message.payload?.label === 'Buffered while the relay is offline').length,
+    1,
+    'Unacknowledged Codex events must replay once after relay reconnection.',
+  );
 } finally {
   await runtime.close();
 }

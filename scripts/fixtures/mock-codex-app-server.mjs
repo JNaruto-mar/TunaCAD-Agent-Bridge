@@ -154,5 +154,13 @@ lines.on('line', (line) => {
     } });
     return;
   }
+  if (message.method === 'turn/steer') {
+    if (!message.params?.expectedTurnId || 'turnId' in message.params) {
+      send({ id: message.id, error: { code: -32602, message: 'expectedTurnId is required and turnId is not accepted.' } });
+      return;
+    }
+    send({ id: message.id, result: { turnId: message.params.expectedTurnId } });
+    return;
+  }
   send({ id: message.id, error: { code: -32601, message: `Unknown method ${message.method}` } });
 });

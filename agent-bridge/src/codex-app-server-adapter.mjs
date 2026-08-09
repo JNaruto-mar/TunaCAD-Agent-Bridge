@@ -60,7 +60,7 @@ export class CodexAppServerAdapter extends EventEmitter {
       const initialized = await client.start({
         name: 'tunacad_agent_bridge',
         title: 'TunaCAD Agent Bridge',
-        version: '0.1.0',
+        version: '0.1.1',
       });
       const accountResult = await client.request('account/read', { refreshToken: false });
       const configResult = await client.request('config/read', { includeLayers: false });
@@ -125,7 +125,7 @@ export class CodexAppServerAdapter extends EventEmitter {
   async steerTurn(threadId, turnId, content) {
     return this.#requiredClient().request('turn/steer', {
       threadId,
-      turnId,
+      expectedTurnId: turnId,
       input: [{ type: 'text', text: requiredPrompt(content) }],
     });
   }

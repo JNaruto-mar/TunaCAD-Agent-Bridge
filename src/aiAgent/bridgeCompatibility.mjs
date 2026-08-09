@@ -15,7 +15,9 @@ export const AGENT_BRIDGE_TIMING_POLICY = Object.freeze({
   loginCompletionTimeoutMs: 10 * 60_000,
   heartbeatIntervalMs: 15_000,
   staleConnectionMs: 45_000,
-  reconnectDelaysMs: Object.freeze([250, 500, 1_000, 2_000, 5_000]),
+  // Keep reconnects bounded, but allow ordinary Wi-Fi changes to outlive the
+  // 45-second stale-heartbeat window before the local Codex process is closed.
+  reconnectDelaysMs: Object.freeze([1_000, 2_000, 4_000, 8_000, 15_000, 30_000]),
 });
 
 export const TUNACAD_REQUIRED_MCP_TOOLS = Object.freeze([

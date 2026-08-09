@@ -1,5 +1,8 @@
 import { createAgentBridgeEnvelope, parseAgentBridgeMessage } from '../../src/aiAgent/bridgeProtocol.mjs';
 
+const MAX_REPLAY_MESSAGES = 2_048;
+const MAX_REPLAY_BYTES = 8 * 1024 * 1024;
+
 export class AgentBridgeRuntime {
   constructor({
     pairing,
@@ -25,6 +28,9 @@ export class AgentBridgeRuntime {
     }
     this.outgoingSequence = initialOutgoingSequence;
     this.lastBrowserSequence = initialBrowserSequence;
+    this.lastAcknowledgedOutgoingSequence = -1;
+    this.outgoingHistory = [];
+    this.outgoingHistoryBytes = 0;
     this.onCursorChange = onCursorChange;
     this.lastHeartbeatAt = null;
     this.account = null;
@@ -88,6 +94,8 @@ export class AgentBridgeRuntime {
 
     switch (message.type) {
       case 'session.resume':
+        this.#acknowledgeOutgoing(message.payload.lastAcceptedSequence);
+        this.#replayUnacknowledged();
         this.#sendReady();
         return;
       case 'heartbeat.pong':
@@ -140,7 +148,6 @@ export class AgentBridgeRuntime {
     this.socket.off?.('message', this.boundMessage);
     this.socket = socket;
     this.socket.on('message', this.boundMessage);
-    this.#sendReady();
   }
 
   cursorSnapshot() {
@@ -182,7 +189,7 @@ export class AgentBridgeRuntime {
     this.#sendDescriptor({
       type: 'bridge.ready',
       payload: {
-        bridge: { name: 'tunacad-agent-bridge', version: '0.1.0', platform: process.platform },
+        bridge: { name: 'tunacad-agent-bridge', version: '0.1.1', platform: process.platform },
         agent: { name: 'Codex App Server', version: this.agentVersion },
         supportedProtocols: ['tunacad.agent-bridge/1'],
         lastAcceptedSequence: this.lastBrowserSequence < 0 ? 0 : this.lastBrowserSequence,
@@ -207,7 +214,6 @@ export class AgentBridgeRuntime {
   }
 
   #sendDescriptor(descriptor) {
-    if (this.socket.readyState !== 1) throw new Error('TunaCAD relay socket is not open.');
     const envelope = createAgentBridgeEnvelope({
       ...descriptor,
       sessionId: this.pairing.sessionId,
@@ -215,8 +221,38 @@ export class AgentBridgeRuntime {
       now: this.now(),
       uuid: this.uuid,
     });
-    this.socket.send(JSON.stringify(envelope));
+    const serialized = JSON.stringify(envelope);
+    this.#rememberOutgoing(envelope.sequence, serialized);
+    if (this.socket.readyState === 1) this.socket.send(serialized);
     this.#cursorChanged();
+  }
+
+  #rememberOutgoing(sequence, serialized) {
+    const bytes = Buffer.byteLength(serialized);
+    this.outgoingHistory.push({ sequence, serialized, bytes });
+    this.outgoingHistoryBytes += bytes;
+    while (
+      this.outgoingHistory.length > MAX_REPLAY_MESSAGES
+      || this.outgoingHistoryBytes > MAX_REPLAY_BYTES
+    ) {
+      const removed = this.outgoingHistory.shift();
+      this.outgoingHistoryBytes -= removed?.bytes ?? 0;
+    }
+  }
+
+  #acknowledgeOutgoing(sequence) {
+    this.lastAcknowledgedOutgoingSequence = Math.max(this.lastAcknowledgedOutgoingSequence, sequence);
+    while (this.outgoingHistory[0]?.sequence <= this.lastAcknowledgedOutgoingSequence) {
+      const removed = this.outgoingHistory.shift();
+      this.outgoingHistoryBytes -= removed?.bytes ?? 0;
+    }
+  }
+
+  #replayUnacknowledged() {
+    if (this.socket.readyState !== 1) return;
+    for (const entry of this.outgoingHistory) {
+      if (entry.sequence > this.lastAcknowledgedOutgoingSequence) this.socket.send(entry.serialized);
+    }
   }
 
   #cursorChanged() {
