@@ -116,6 +116,12 @@ lines.on('line', (line) => {
     send({ method: 'thread/started', params: { thread: { id: 'thread:mock' } } });
     return;
   }
+  if (message.method === 'thread/resume') {
+    const resumedThreadId = message.params?.threadId ?? 'thread:mock';
+    send({ id: message.id, result: { thread: { id: resumedThreadId, ephemeral: false } } });
+    send({ method: 'thread/started', params: { thread: { id: resumedThreadId } } });
+    return;
+  }
   if (message.method === 'turn/start') {
     const prompt = message.params?.input?.map?.((entry) => entry.text ?? '').join(' ') ?? '';
     if (prompt.includes('APPROVAL_LIFECYCLE')) {

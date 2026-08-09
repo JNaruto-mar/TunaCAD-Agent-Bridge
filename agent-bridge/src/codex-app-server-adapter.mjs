@@ -60,7 +60,7 @@ export class CodexAppServerAdapter extends EventEmitter {
       const initialized = await client.start({
         name: 'tunacad_agent_bridge',
         title: 'TunaCAD Agent Bridge',
-        version: '0.1.1',
+        version: '0.2.0',
       });
       const accountResult = await client.request('account/read', { refreshToken: false });
       const configResult = await client.request('config/read', { includeLayers: false });
@@ -145,6 +145,20 @@ export class CodexAppServerAdapter extends EventEmitter {
         turnId: request.params.turnId,
       });
     }
+  }
+
+  async reportCadApproval({ threadId, turnId = null, proposalId, decision }) {
+    const prompt = createCadApprovalOutcomePrompt({ proposalId, decision });
+    if (turnId) {
+      return {
+        mode: 'steer',
+        result: await this.steerTurn(threadId, turnId, prompt),
+      };
+    }
+    return {
+      mode: 'follow_up_turn',
+      result: await this.startTurn(threadId, prompt),
+    };
   }
 
   async respondToUserInput(inputRequestId, answers) {
@@ -312,4 +326,17 @@ export function normalizeDeviceCodeLogin(result) {
 function requiredPrompt(content) {
   if (typeof content !== 'string' || !content.trim()) throw new Error('A non-empty Codex prompt is required.');
   return content;
+}
+
+export function createCadApprovalOutcomePrompt({ proposalId, decision }) {
+  if (!/^cadprop_[0-9a-f-]{36}$/i.test(proposalId ?? '')) throw new Error('Invalid TunaCAD CAD proposal ID.');
+  if (!['accept', 'decline', 'cancel'].includes(decision)) throw new Error('Invalid TunaCAD CAD approval outcome.');
+  const outcome = decision === 'accept' ? 'approved and executed' : decision === 'decline' ? 'rejected' : 'cancelled';
+  return [
+    'Authoritative TunaCAD browser event.',
+    `CAD proposal ${proposalId} was ${outcome} by the user inside TunaCAD.`,
+    `Call cad_get_staged_plan with proposalId "${proposalId}" to read its authoritative status and execution report.`,
+    'Do not call cad_execute_plan or attempt to approve the proposal yourself.',
+    'Briefly report the result in this same TunaCAD conversation, including objective validation results when execution succeeded.',
+  ].join(' ');
 }

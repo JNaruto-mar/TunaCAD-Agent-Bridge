@@ -37,6 +37,7 @@ export class AgentBridgeRuntime {
     this.agentVersion = null;
     this.activeThreadId = null;
     this.activeTurnId = null;
+    this.cadApprovalDecisions = new Map();
     this.started = false;
     this.closed = false;
     this.boundMessage = (data) => {
@@ -129,7 +130,8 @@ export class AgentBridgeRuntime {
         await this.adapter.cancelTurn(message.payload.threadId, message.payload.turnId);
         return;
       case 'approval.decision':
-        await this.adapter.respondToApproval(message.payload.approvalId, message.payload.decision);
+        if (message.payload.domain === 'cad') await this.#respondToCadApproval(message.payload);
+        else await this.adapter.respondToApproval(message.payload.approvalId, message.payload.decision);
         return;
       case 'user_input.response':
         await this.adapter.respondToUserInput(message.payload.inputRequestId, message.payload.answers);
@@ -184,12 +186,38 @@ export class AgentBridgeRuntime {
     this.#sendDescriptor(descriptor);
   }
 
+  async #respondToCadApproval({ approvalId, decision }) {
+    const prefix = 'cadapproval:';
+    if (!approvalId.startsWith(prefix)) throw new Error('Invalid TunaCAD CAD approval correlation ID.');
+    if (!['accept', 'decline', 'cancel'].includes(decision)) throw new Error('CAD proposals support accept, decline, or cancel only.');
+    if (!this.activeThreadId) throw new Error('A CAD approval outcome requires an active Codex thread.');
+    const proposalId = approvalId.slice(prefix.length);
+    const prior = this.cadApprovalDecisions.get(approvalId);
+    if (prior && prior !== decision) throw new Error('A CAD approval outcome cannot be changed after it is reported.');
+    if (!prior) {
+      await this.adapter.reportCadApproval({
+        threadId: this.activeThreadId,
+        turnId: this.activeTurnId,
+        proposalId,
+        decision,
+      });
+      this.cadApprovalDecisions.set(approvalId, decision);
+      while (this.cadApprovalDecisions.size > 256) {
+        this.cadApprovalDecisions.delete(this.cadApprovalDecisions.keys().next().value);
+      }
+    }
+    this.#sendDescriptor({
+      type: 'approval.resolved',
+      payload: { approvalId, domain: 'cad', decision },
+    });
+  }
+
   #sendReady() {
     if (!this.agentVersion || this.account?.requiresOpenaiAuth) return;
     this.#sendDescriptor({
       type: 'bridge.ready',
       payload: {
-        bridge: { name: 'tunacad-agent-bridge', version: '0.1.1', platform: process.platform },
+        bridge: { name: 'tunacad-agent-bridge', version: '0.2.0', platform: process.platform },
         agent: { name: 'Codex App Server', version: this.agentVersion },
         supportedProtocols: ['tunacad.agent-bridge/1'],
         lastAcceptedSequence: this.lastBrowserSequence < 0 ? 0 : this.lastBrowserSequence,

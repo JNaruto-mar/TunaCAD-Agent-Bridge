@@ -5,6 +5,7 @@ import { AgentBridgeRuntime } from '../agent-bridge/src/agent-bridge-runtime.mjs
 import {
   CodexAppServerAdapter,
   TUNACAD_MCP_TOKEN_ENVIRONMENT_VARIABLE,
+  createCadApprovalOutcomePrompt,
   createCodexLaunchArguments,
   normalizeDeviceCodeLogin,
 } from '../agent-bridge/src/codex-app-server-adapter.mjs';
@@ -45,6 +46,7 @@ assert.throws(() => normalizeDeviceCodeLogin({
   verificationUrl: 'https://example.com/phishing',
   userCode: 'TUNA-CAD1',
 }), /untrusted/);
+assert.throws(() => createCadApprovalOutcomePrompt({ proposalId: 'bad\nproposal', decision: 'accept' }), /Invalid TunaCAD CAD proposal ID/);
 let launchOptions;
 const adapter = new CodexAppServerAdapter({
   pairing,
@@ -60,6 +62,13 @@ const adapter = new CodexAppServerAdapter({
     });
   },
 });
+const cadOutcomeReports = [];
+const reportCadApproval = adapter.reportCadApproval.bind(adapter);
+adapter.reportCadApproval = async (outcome) => {
+  const result = await reportCadApproval(outcome);
+  cadOutcomeReports.push({ outcome, result });
+  return result;
+};
 let uuidCounter = 0;
 const runtime = new AgentBridgeRuntime({
   pairing,
@@ -97,6 +106,11 @@ try {
 
   await runtime.handleBrowserMessage(browserMessage('thread.start', {}));
   await waitForSent(socket, (message) => message.type === 'thread.started');
+  const threadEventCount = socket.messages().filter((message) => message.type === 'thread.started').length;
+  await runtime.handleBrowserMessage(browserMessage('thread.resume', { threadId: 'thread:mock' }));
+  await waitForMessageCount(socket, 'thread.started', threadEventCount + 1);
+  const resumedThread = socket.messages().filter((message) => message.type === 'thread.started').at(-1);
+  assert.equal(resumedThread.payload.threadId, 'thread:mock');
 
   await runtime.handleBrowserMessage(browserMessage('chat.user_message', {
     threadId: 'thread:mock',
@@ -110,6 +124,34 @@ try {
     await adapter.steerTurn('thread:mock', 'turn:mock', 'Focus on the requested validation.'),
     { turnId: 'turn:mock' },
   );
+
+  const cadProposalId = 'cadprop_20000000-0000-4000-8000-000000000033';
+  const cadApprovalId = `cadapproval:${cadProposalId}`;
+  const resolutionsBeforeCadOutcome = socket.messages().filter((message) => message.type === 'approval.resolved').length;
+  await runtime.handleBrowserMessage(browserMessage('approval.decision', {
+    approvalId: cadApprovalId,
+    domain: 'cad',
+    decision: 'accept',
+  }));
+  await waitForMessageCount(socket, 'approval.resolved', resolutionsBeforeCadOutcome + 1);
+  const cadResolved = socket.messages().filter((message) => message.type === 'approval.resolved').at(-1);
+  assert.deepEqual(cadResolved.payload, { approvalId: cadApprovalId, domain: 'cad', decision: 'accept' });
+  assert.equal(cadOutcomeReports.length, 1);
+  assert.equal(cadOutcomeReports[0].outcome.threadId, 'thread:mock');
+  assert.equal(cadOutcomeReports[0].outcome.proposalId, cadProposalId);
+  assert.ok(['steer', 'follow_up_turn'].includes(cadOutcomeReports[0].result.mode));
+  await runtime.handleBrowserMessage(browserMessage('approval.decision', {
+    approvalId: cadApprovalId,
+    domain: 'cad',
+    decision: 'accept',
+  }));
+  await waitForMessageCount(socket, 'approval.resolved', resolutionsBeforeCadOutcome + 2);
+  assert.equal(cadOutcomeReports.length, 1, 'CAD outcome replay must not create another Codex continuation.');
+  await assert.rejects(runtime.handleBrowserMessage(browserMessage('approval.decision', {
+    approvalId: cadApprovalId,
+    domain: 'cad',
+    decision: 'decline',
+  })), /cannot be changed/);
 
   await runtime.handleBrowserMessage(browserMessage('chat.user_message', {
     threadId: 'thread:mock',
@@ -223,7 +265,7 @@ try {
   await cancellationAdapter.close();
 }
 
-console.log('[agent-bridge] Companion Codex stdio supervision, managed device-code login, process-scoped MCP config, authenticated Ready, streaming, approvals, heartbeat, and replay defense passed.');
+console.log('[agent-bridge] Companion supervision, login, MCP config, streaming, agent approvals, idempotent CAD outcome continuation, heartbeat, and replay defense passed.');
 
 async function waitForSent(relaySocket, predicate, timeoutMs = 2_000) {
   const startedAt = Date.now();
@@ -233,4 +275,13 @@ async function waitForSent(relaySocket, predicate, timeoutMs = 2_000) {
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error('Timed out waiting for companion relay output.');
+}
+
+async function waitForMessageCount(relaySocket, type, expected, timeoutMs = 2_000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (relaySocket.messages().filter((message) => message.type === type).length >= expected) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${expected} ${type} messages.`);
 }
