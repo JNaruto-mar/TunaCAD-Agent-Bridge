@@ -1,0 +1,46 @@
+{
+  "name": "@tunacad/agent-bridge",
+  "version": "0.1.0",
+  "description": "Local authenticated bridge between TunaCAD browser workspaces and Codex App Server.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "bin": {
+    "tunacad-agent-bridge": "dist/agent-bridge/bin/tunacad-agent-bridge.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "npm-shrinkwrap.json"
+  ],
+  "scripts": {
+    "prepare:package": "node scripts/prepare-package.mjs",
+    "prepack": "npm run prepare:package"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "ws": "8.21.1",
+    "zod": "4.4.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JNaruto-mar/TunaCAD-Agent-Bridge.git",
+    "directory": "agent-bridge"
+  },
+  "homepage": "https://tunacad.com",
+  "bugs": {
+    "url": "https://github.com/JNaruto-mar/TunaCAD-Agent-Bridge/issues"
+  },
+  "keywords": [
+    "tunacad",
+    "cad",
+    "codex",
+    "mcp"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  }
+}
