@@ -41,7 +41,16 @@ function normalize(value) {
 }
 
 function runNpm(args, options = {}) {
-  return run(npmInvocation.command, [...npmInvocation.prefix, ...args], options);
+  const cacheRoot = path.resolve(temporaryRoot, 'npm-cache');
+  return run(npmInvocation.command, [...npmInvocation.prefix, ...args], {
+    ...options,
+    env: {
+      ...process.env,
+      npm_config_cache: cacheRoot,
+      npm_config_update_notifier: 'false',
+      ...options.env,
+    },
+  });
 }
 
 const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'tunacad-agent-bridge-package-'));

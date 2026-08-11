@@ -14,7 +14,7 @@ The TunaCAD Agent Bridge connects a TunaCAD browser workspace to a locally insta
 Copy the exact command shown by TunaCAD. It has this form:
 
 ```sh
-npx --yes @tunacad/agent-bridge@0.2.1 connect --origin https://tunacad.com --session <session-id>
+npx --yes @tunacad/agent-bridge@0.2.2 connect --origin https://tunacad.com --session <session-id>
 ```
 
 Enter the one-time code only at the interactive prompt. Do not place the code in command history. If Codex authentication is required, the bridge displays the official OpenAI device-code URL and code.

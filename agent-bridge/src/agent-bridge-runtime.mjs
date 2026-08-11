@@ -195,12 +195,6 @@ export class AgentBridgeRuntime {
     const prior = this.cadApprovalDecisions.get(approvalId);
     if (prior && prior !== decision) throw new Error('A CAD approval outcome cannot be changed after it is reported.');
     if (!prior) {
-      await this.adapter.reportCadApproval({
-        threadId: this.activeThreadId,
-        turnId: this.activeTurnId,
-        proposalId,
-        decision,
-      });
       this.cadApprovalDecisions.set(approvalId, decision);
       while (this.cadApprovalDecisions.size > 256) {
         this.cadApprovalDecisions.delete(this.cadApprovalDecisions.keys().next().value);
@@ -210,6 +204,17 @@ export class AgentBridgeRuntime {
       type: 'approval.resolved',
       payload: { approvalId, domain: 'cad', decision },
     });
+    if (!prior) {
+      const outcome = {
+        threadId: this.activeThreadId,
+        turnId: this.activeTurnId,
+        proposalId,
+        decision,
+      };
+      void this.adapter.reportCadApproval(outcome).catch((error) => {
+        this.#sendFailure(error, true, 'CAD_OUTCOME_REPORT_FAILED');
+      });
+    }
   }
 
   #sendReady() {
@@ -217,7 +222,7 @@ export class AgentBridgeRuntime {
     this.#sendDescriptor({
       type: 'bridge.ready',
       payload: {
-        bridge: { name: 'tunacad-agent-bridge', version: '0.2.1', platform: process.platform },
+        bridge: { name: 'tunacad-agent-bridge', version: '0.2.2', platform: process.platform },
         agent: { name: 'Codex App Server', version: this.agentVersion },
         supportedProtocols: ['tunacad.agent-bridge/1'],
         lastAcceptedSequence: this.lastBrowserSequence < 0 ? 0 : this.lastBrowserSequence,

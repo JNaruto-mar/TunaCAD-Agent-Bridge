@@ -68,7 +68,10 @@ const adapter = new CodexAppServerAdapter({
 });
 const cadOutcomeReports = [];
 const reportCadApproval = adapter.reportCadApproval.bind(adapter);
+let releaseCadOutcomeReport = null;
+let cadOutcomeReportGate = Promise.resolve();
 adapter.reportCadApproval = async (outcome) => {
+  await cadOutcomeReportGate;
   const result = await reportCadApproval(outcome);
   cadOutcomeReports.push({ outcome, result });
   return result;
@@ -132,6 +135,7 @@ try {
   const cadProposalId = 'cadprop_20000000-0000-4000-8000-000000000033';
   const cadApprovalId = `cadapproval:${cadProposalId}`;
   const resolutionsBeforeCadOutcome = socket.messages().filter((message) => message.type === 'approval.resolved').length;
+  cadOutcomeReportGate = new Promise((resolve) => { releaseCadOutcomeReport = resolve; });
   await runtime.handleBrowserMessage(browserMessage('approval.decision', {
     approvalId: cadApprovalId,
     domain: 'cad',
@@ -140,7 +144,9 @@ try {
   await waitForMessageCount(socket, 'approval.resolved', resolutionsBeforeCadOutcome + 1);
   const cadResolved = socket.messages().filter((message) => message.type === 'approval.resolved').at(-1);
   assert.deepEqual(cadResolved.payload, { approvalId: cadApprovalId, domain: 'cad', decision: 'accept' });
-  assert.equal(cadOutcomeReports.length, 1);
+  assert.equal(cadOutcomeReports.length, 0, 'CAD acknowledgement must not wait for the Codex continuation.');
+  releaseCadOutcomeReport();
+  await waitForCondition(() => cadOutcomeReports.length === 1);
   assert.equal(cadOutcomeReports[0].outcome.threadId, 'thread:mock');
   assert.equal(cadOutcomeReports[0].outcome.proposalId, cadProposalId);
   assert.ok(['steer', 'follow_up_turn'].includes(cadOutcomeReports[0].result.mode));
@@ -288,4 +294,13 @@ async function waitForMessageCount(relaySocket, type, expected, timeoutMs = 2_00
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
   throw new Error(`Timed out waiting for ${expected} ${type} messages.`);
+}
+
+async function waitForCondition(predicate, timeoutMs = 2_000) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error('Timed out waiting for the expected companion state.');
 }
