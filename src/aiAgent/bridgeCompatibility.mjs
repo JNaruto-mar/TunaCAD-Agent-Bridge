@@ -15,8 +15,13 @@ export const AGENT_BRIDGE_TIMING_POLICY = Object.freeze({
   loginCompletionTimeoutMs: 10 * 60_000,
   heartbeatIntervalMs: 15_000,
   staleConnectionMs: 45_000,
+  relaySocketOpenTimeoutMs: 10_000,
+  reconnectBudgetMs: 70_000,
+  reconnectJitterRatio: 0.2,
   // Keep reconnects bounded, but allow ordinary Wi-Fi changes to outlive the
   // 45-second stale-heartbeat window before the local Codex process is closed.
+  // Downward-only jitter keeps the six-slot schedule at or below 60 seconds;
+  // the total budget adds one final 10-second socket handshake window.
   reconnectDelaysMs: Object.freeze([1_000, 2_000, 4_000, 8_000, 15_000, 30_000]),
 });
 

@@ -8,6 +8,7 @@ import { FileCursorStore } from '../agent-bridge/src/cursor-store.mjs';
 import { isRelaySocketStale, nextRelayHeartbeatAlarm } from '../src/aiAgent/relayHeartbeat.mjs';
 import { createRelayControlMessage, parseRelayControlMessage } from '../src/aiAgent/relayControl.mjs';
 import { createAgentBridgeEnvelope } from '../src/aiAgent/bridgeProtocol.mjs';
+import { jitterReconnectDelay, remainingReconnectBudget } from '../src/aiAgent/reconnectPolicy.mjs';
 
 class FakeSocket extends EventEmitter {
   constructor() {
@@ -26,9 +27,25 @@ class FakeSocket extends EventEmitter {
     this.emit('close', code, Buffer.from(reason));
   }
 
+  terminate() {
+    this.close(1006, 'Synthetic socket terminated.');
+  }
+
   messages() {
     return this.sent.map((value) => JSON.parse(value));
   }
+}
+
+class PendingSocket extends FakeSocket {
+  constructor() {
+    super();
+    this.readyState = 0;
+  }
+}
+
+class MemoryCursorStore {
+  async load() { return null; }
+  async save() {}
 }
 
 class FakeAdapter extends EventEmitter {
@@ -56,6 +73,11 @@ assert.equal(isRelaySocketStale(1_000, 45_999, 45_000), false);
 assert.equal(isRelaySocketStale(1_000, 46_000, 45_000), true);
 assert.equal(nextRelayHeartbeatAlarm(100_000, 10_000, 15_000), 25_000);
 assert.equal(nextRelayHeartbeatAlarm(20_000, 10_000, 15_000), 20_000);
+assert.equal(jitterReconnectDelay(1_000, 0.2, 0), 1_000);
+assert.equal(jitterReconnectDelay(1_000, 0.2, 0.5), 900);
+assert.equal(jitterReconnectDelay(1_000, 0.2, 1), 800);
+assert.equal(remainingReconnectBudget(1_000, 31_000, 70_000), 40_000);
+assert.throws(() => jitterReconnectDelay(1_000, 1.1, 0.5), /jitter ratio/);
 
 const sessionId = 'a947edc2-6fc8-4e8d-a5e6-931ad75262fc';
 const rotationId = '374ad2e7-1de6-4778-a764-a124e100dd13';
@@ -107,6 +129,8 @@ try {
     pairing: originalPairing,
     cursorStore,
     reconnectDelaysMs: [10, 20, 40],
+    reconnectJitterRatio: 0.2,
+    random: () => 0,
     sleep: async (delayMs) => { reconnectSleeps.push(delayMs); },
     socketFactory: (pairing) => {
       pairingSeenBySocketFactory.push(pairing);
@@ -171,11 +195,113 @@ try {
   } finally {
     await supervisor.close();
   }
+
+
+  await verifyHalfOpenSocketDeadline(originalPairing);
+  await verifyReconnectExhaustion(originalPairing);
+  await verifyReconnectCancellation(originalPairing);
+  await verifyBackoffCancellation(originalPairing);
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });
 }
 
-console.log('[agent-bridge] Bounded reconnect, non-secret cursor persistence, heartbeat deadlines, and acknowledged credential rotation passed.');
+console.log('[agent-bridge] Bounded jittered reconnect, socket-open deadlines, cancellation, process preservation, cursor safety, heartbeat deadlines, and acknowledged credential rotation passed.');
+
+async function verifyHalfOpenSocketDeadline(pairing) {
+  const pending = new PendingSocket();
+  const supervisor = new RelayConnectionSupervisor({
+    pairing,
+    cursorStore: new MemoryCursorStore(),
+    reconnectDelaysMs: [],
+    socketOpenTimeoutMs: 15,
+    reconnectBudgetMs: 100,
+    socketFactory: () => pending,
+    adapterFactory: () => new FakeAdapter(() => {}, () => {}),
+  });
+  const startedAt = Date.now();
+  await assert.rejects(supervisor.start(), /did not open within 15 ms/);
+  assert.ok(Date.now() - startedAt < 500, 'A half-open relay dial must fail on its explicit open deadline.');
+  assert.equal(pending.readyState, 3, 'A timed-out relay socket must be terminated.');
+  await supervisor.close();
+}
+
+async function verifyReconnectExhaustion(pairing) {
+  const sleeps = [];
+  let attempts = 0;
+  const supervisor = new RelayConnectionSupervisor({
+    pairing,
+    cursorStore: new MemoryCursorStore(),
+    reconnectDelaysMs: [10, 20],
+    reconnectJitterRatio: 0.2,
+    random: () => 1,
+    reconnectBudgetMs: 100,
+    sleep: async (delayMs) => { sleeps.push(delayMs); },
+    socketFactory: () => {
+      attempts += 1;
+      throw new Error('Synthetic exhausted relay dial.');
+    },
+    adapterFactory: () => new FakeAdapter(() => {}, () => {}),
+  });
+  await assert.rejects(supervisor.start(), /Synthetic exhausted relay dial/);
+  assert.equal(attempts, 3, 'Initial dial plus two bounded retries must be attempted exactly once each.');
+  assert.deepEqual(sleeps, [8, 16], 'Reconnect slots must apply deterministic bounded jitter.');
+  await supervisor.close();
+}
+
+async function verifyReconnectCancellation(pairing) {
+  const initial = new FakeSocket();
+  const pending = new PendingSocket();
+  let socketAttempt = 0;
+  let adapterCloses = 0;
+  const failures = [];
+  const supervisor = new RelayConnectionSupervisor({
+    pairing,
+    cursorStore: new MemoryCursorStore(),
+    reconnectDelaysMs: [1],
+    socketOpenTimeoutMs: 5_000,
+    reconnectBudgetMs: 6_000,
+    sleep: async () => {},
+    socketFactory: () => (socketAttempt++ === 0 ? initial : pending),
+    adapterFactory: () => new FakeAdapter(() => {}, () => { adapterCloses += 1; }),
+  });
+  supervisor.on('failure', (error) => failures.push(error));
+  await supervisor.start();
+  initial.close(1006, 'Synthetic interruption before cancellation.');
+  await waitFor(() => socketAttempt === 2);
+  await supervisor.close();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(pending.readyState, 3, 'Closing the supervisor must terminate a pending reconnect dial.');
+  assert.equal(adapterCloses, 1, 'Cancellation must close the preserved Codex runtime exactly once.');
+  assert.deepEqual(failures, [], 'Intentional reconnect cancellation must not surface as a transport failure.');
+}
+
+async function verifyBackoffCancellation(pairing) {
+  const initial = new FakeSocket();
+  let socketAttempt = 0;
+  let adapterCloses = 0;
+  const failures = [];
+  const supervisor = new RelayConnectionSupervisor({
+    pairing,
+    cursorStore: new MemoryCursorStore(),
+    reconnectDelaysMs: [5_000],
+    socketFactory: () => {
+      if (socketAttempt++ === 0) return initial;
+      throw new Error('Synthetic dial failure before cancellable backoff.');
+    },
+    adapterFactory: () => new FakeAdapter(() => {}, () => { adapterCloses += 1; }),
+  });
+  supervisor.on('failure', (error) => failures.push(error));
+  await supervisor.start();
+  const backoffStarted = once(supervisor, 'reconnecting');
+  initial.close(1006, 'Synthetic interruption before cancellable backoff.');
+  await backoffStarted;
+  const closeStartedAt = Date.now();
+  await supervisor.close();
+  assert.ok(Date.now() - closeStartedAt < 500, 'Closing the supervisor must cancel a pending backoff immediately.');
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(adapterCloses, 1, 'Backoff cancellation must close the preserved Codex runtime exactly once.');
+  assert.deepEqual(failures, [], 'Intentional backoff cancellation must not surface as a transport failure.');
+}
 
 async function waitFor(predicate, timeoutMs = 2_000) {
   const started = Date.now();

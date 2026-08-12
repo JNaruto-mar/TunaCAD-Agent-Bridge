@@ -22,6 +22,7 @@ const sources = [
   'src/aiAgent/bridgeProtocol.mjs',
   'src/aiAgent/codexEventMapper.mjs',
   'src/aiAgent/codexRequestTracker.mjs',
+  'src/aiAgent/reconnectPolicy.mjs',
   'src/aiAgent/relayControl.mjs',
 ];
 

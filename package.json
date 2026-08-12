@@ -1,13 +1,14 @@
 {
   "name": "tunacad-agent-bridge-source",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "npm run test:runtime && npm run test:resilience && npm run test:package",
     "test:runtime": "node scripts/test-agent-bridge-codex-runtime.mjs",
     "test:resilience": "node scripts/test-agent-bridge-resilience.mjs",
-    "test:package": "node scripts/test-agent-bridge-package-artifact.mjs"
+    "test:package": "node scripts/test-agent-bridge-package-artifact.mjs",
+    "benchmark:relay": "node scripts/benchmark-ai-agent-relay-resilience.mjs"
   },
   "dependencies": {
     "ws": "8.21.1",

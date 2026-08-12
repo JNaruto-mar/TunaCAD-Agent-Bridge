@@ -226,7 +226,7 @@ export class AgentBridgeRuntime {
     this.#sendDescriptor({
       type: 'bridge.ready',
       payload: {
-        bridge: { name: 'tunacad-agent-bridge', version: '0.2.3', platform: process.platform },
+        bridge: { name: 'tunacad-agent-bridge', version: '0.2.4', platform: process.platform },
         agent: { name: 'Codex App Server', version: this.agentVersion },
         supportedProtocols: ['tunacad.agent-bridge/1'],
         lastAcceptedSequence: this.lastBrowserSequence < 0 ? 0 : this.lastBrowserSequence,

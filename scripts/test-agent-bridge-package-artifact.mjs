@@ -66,7 +66,7 @@ try {
   assert.equal(assembly.packageName, '@tunacad/agent-bridge');
   assert.equal(assembly.packageVersion, packageJson.version);
   assert.equal(assembly.protocol, 'tunacad.agent-bridge/1');
-  assert.equal(assembly.files.length, 12);
+  assert.equal(assembly.files.length, 13);
   assert.equal(new Set(assembly.files.map((file) => file.path)).size, assembly.files.length);
   assert.deepEqual(shrinkwrap.packages[''].dependencies, packageJson.dependencies);
   assert.equal(shrinkwrap.packages[''].version, packageJson.version);

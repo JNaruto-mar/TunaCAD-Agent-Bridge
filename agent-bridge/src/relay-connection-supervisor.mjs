@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { AGENT_BRIDGE_TIMING_POLICY } from '../../src/aiAgent/bridgeCompatibility.mjs';
+import { jitterReconnectDelay, remainingReconnectBudget } from '../../src/aiAgent/reconnectPolicy.mjs';
 import {
   AGENT_RELAY_CONTROL_PROTOCOL,
   createRelayControlMessage,
@@ -20,7 +21,12 @@ export class RelayConnectionSupervisor extends EventEmitter {
     runtimeFactory = (options) => new AgentBridgeRuntime(options),
     cursorStore = new FileCursorStore(),
     reconnectDelaysMs = AGENT_BRIDGE_TIMING_POLICY.reconnectDelaysMs,
-    sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, delayMs)),
+    socketOpenTimeoutMs = AGENT_BRIDGE_TIMING_POLICY.relaySocketOpenTimeoutMs,
+    reconnectBudgetMs = AGENT_BRIDGE_TIMING_POLICY.reconnectBudgetMs,
+    reconnectJitterRatio = AGENT_BRIDGE_TIMING_POLICY.reconnectJitterRatio,
+    random = Math.random,
+    now = Date.now,
+    sleep = cancellableDelay,
   }) {
     super();
     this.pairing = pairing;
@@ -29,7 +35,13 @@ export class RelayConnectionSupervisor extends EventEmitter {
     this.runtimeFactory = runtimeFactory;
     this.cursorStore = cursorStore;
     this.reconnectDelaysMs = [...reconnectDelaysMs];
+    this.socketOpenTimeoutMs = socketOpenTimeoutMs;
+    this.reconnectBudgetMs = reconnectBudgetMs;
+    this.reconnectJitterRatio = reconnectJitterRatio;
+    this.random = random;
+    this.now = now;
     this.sleep = sleep;
+    this.transportAbort = new AbortController();
     this.socket = null;
     this.runtime = null;
     this.started = false;
@@ -53,6 +65,7 @@ export class RelayConnectionSupervisor extends EventEmitter {
   async close() {
     if (this.closed) return;
     this.closed = true;
+    this.transportAbort.abort();
     const socket = this.socket;
     this.socket = null;
     socket?.close(1000, 'TunaCAD Agent Bridge stopped.');
@@ -69,22 +82,39 @@ export class RelayConnectionSupervisor extends EventEmitter {
 
   async #connectWithBackoff() {
     let lastError;
+    const startedAtMs = this.now();
+    const signal = this.transportAbort.signal;
     for (let attempt = 0; attempt <= this.reconnectDelaysMs.length; attempt += 1) {
       if (this.closed) throw new Error('Relay connection supervisor is closed.');
       if (attempt > 0) {
-        const delayMs = this.reconnectDelaysMs[attempt - 1];
-        this.emit('reconnecting', { attempt, delayMs });
-        await this.sleep(delayMs);
+        const remainingMs = remainingReconnectBudget(startedAtMs, this.now(), this.reconnectBudgetMs);
+        if (remainingMs <= 0) break;
+        const baseDelayMs = this.reconnectDelaysMs[attempt - 1];
+        const delayMs = Math.min(
+          remainingMs,
+          jitterReconnectDelay(baseDelayMs, this.reconnectJitterRatio, this.random()),
+        );
+        this.emit('reconnecting', { attempt, delayMs, baseDelayMs });
+        await raceWithAbort(this.sleep(delayMs, signal), signal);
       }
       try {
         const socket = this.socketFactory(this.pairing);
-        await waitForOpen(socket);
+        const remainingMs = remainingReconnectBudget(startedAtMs, this.now(), this.reconnectBudgetMs);
+        if (remainingMs <= 0) {
+          closePendingSocket(socket, 'TunaCAD relay reconnect budget was exhausted.');
+          break;
+        }
+        await waitForOpen(socket, {
+          timeoutMs: Math.min(this.socketOpenTimeoutMs, remainingMs),
+          signal,
+        });
         return socket;
       } catch (error) {
+        if (signal.aborted) throw abortError();
         lastError = error;
       }
     }
-    throw lastError ?? new Error('TunaCAD relay reconnect attempts were exhausted.');
+    throw lastError ?? new Error(`TunaCAD relay reconnect budget was exhausted after ${this.reconnectBudgetMs} ms.`);
   }
 
   async #activateSocket(socket) {
@@ -145,6 +175,7 @@ export class RelayConnectionSupervisor extends EventEmitter {
       this.rotationCommitted = false;
       this.rotationTransition = null;
     } catch (error) {
+      if (this.closed || error?.name === 'AbortError') return;
       await this.close().catch(() => undefined);
       this.emit('failure', error);
     }
@@ -203,22 +234,98 @@ export class RelayConnectionSupervisor extends EventEmitter {
   }
 }
 
-function waitForOpen(socket) {
+function waitForOpen(socket, { timeoutMs, signal }) {
   if (socket.readyState === 1) return Promise.resolve();
+  if (socket.readyState !== 0) return Promise.reject(new Error('TunaCAD relay socket is not openable.'));
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      closePendingSocket(socket, `TunaCAD relay socket did not open within ${timeoutMs} ms.`);
+      reject(new Error(`TunaCAD relay socket did not open within ${timeoutMs} ms.`));
+    }, timeoutMs);
     const onOpen = () => finish(resolve);
     const onError = (error) => finish(reject, error);
     const onClose = (code) => finish(reject, new Error(`TunaCAD relay closed before opening (${code}).`));
-    const finish = (callback, value) => {
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      closePendingSocket(socket, 'TunaCAD Agent Bridge stopped while connecting.');
+      reject(abortError());
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
       socket.off?.('open', onOpen);
       socket.off?.('error', onError);
       socket.off?.('close', onClose);
+    };
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
       callback(value);
     };
     socket.once('open', onOpen);
     socket.once('error', onError);
     socket.once('close', onClose);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
   });
+}
+
+function raceWithAbort(promise, signal) {
+  if (signal.aborted) return Promise.reject(abortError());
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => finish(reject, abortError());
+    const finish = (callback, value) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      callback(value);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(promise).then(
+      (value) => finish(resolve, value),
+      (error) => finish(reject, error),
+    );
+  });
+}
+
+function cancellableDelay(delayMs, signal) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => finish(resolve), delayMs);
+    const onAbort = () => finish(reject, abortError());
+    const finish = (callback, value) => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      callback(value);
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
+}
+
+function closePendingSocket(socket, reason) {
+  if (!socket || socket.readyState === 3) return;
+  // ws may emit a late error when a CONNECTING socket is terminated. Keep it contained.
+  socket.once?.('error', () => {});
+  try {
+    if (typeof socket.terminate === 'function') socket.terminate();
+    else socket.close?.(1000, reason);
+  } catch {
+    // The open deadline is authoritative even if the transport already tore itself down.
+  }
+}
+
+function abortError() {
+  const error = new Error('TunaCAD relay connection was cancelled.');
+  error.name = 'AbortError';
+  return error;
 }
 
 function isRelayControlInput(input) {
