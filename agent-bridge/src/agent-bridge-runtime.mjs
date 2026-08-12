@@ -171,19 +171,23 @@ export class AgentBridgeRuntime {
   }
 
   #handleAdapterEvent(descriptor) {
-    if (descriptor.type === 'account.updated') {
-      this.account = descriptor.payload;
+    try {
+      if (descriptor.type === 'account.updated') {
+        this.account = descriptor.payload;
+        this.#sendDescriptor(descriptor);
+        if (!this.account.requiresOpenaiAuth) this.#sendReady();
+        return;
+      }
+      if (descriptor.type === 'thread.started') this.activeThreadId = descriptor.payload.threadId;
+      if (descriptor.type === 'turn.started') {
+        this.activeThreadId = descriptor.payload.threadId;
+        this.activeTurnId = descriptor.payload.turnId;
+      }
+      if (descriptor.type === 'turn.completed') this.activeTurnId = null;
       this.#sendDescriptor(descriptor);
-      if (!this.account.requiresOpenaiAuth) this.#sendReady();
-      return;
+    } catch (error) {
+      this.#sendFailure(error, true, 'AGENT_EVENT_REJECTED');
     }
-    if (descriptor.type === 'thread.started') this.activeThreadId = descriptor.payload.threadId;
-    if (descriptor.type === 'turn.started') {
-      this.activeThreadId = descriptor.payload.threadId;
-      this.activeTurnId = descriptor.payload.turnId;
-    }
-    if (descriptor.type === 'turn.completed') this.activeTurnId = null;
-    this.#sendDescriptor(descriptor);
   }
 
   async #respondToCadApproval({ approvalId, decision }) {
@@ -222,7 +226,7 @@ export class AgentBridgeRuntime {
     this.#sendDescriptor({
       type: 'bridge.ready',
       payload: {
-        bridge: { name: 'tunacad-agent-bridge', version: '0.2.2', platform: process.platform },
+        bridge: { name: 'tunacad-agent-bridge', version: '0.2.3', platform: process.platform },
         agent: { name: 'Codex App Server', version: this.agentVersion },
         supportedProtocols: ['tunacad.agent-bridge/1'],
         lastAcceptedSequence: this.lastBrowserSequence < 0 ? 0 : this.lastBrowserSequence,

@@ -24,6 +24,7 @@ export const TUNACAD_REQUIRED_MCP_TOOLS = Object.freeze([
   'cad_get_capabilities',
   'cad_get_project_state',
   'cad_get_assembly_state',
+  'cad_get_observability',
   'cad_search_tools',
   'cad_validate_plan',
   'cad_stage_plan',

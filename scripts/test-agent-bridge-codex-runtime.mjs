@@ -194,6 +194,15 @@ try {
   );
   assert.equal(socket.sent.join('').includes(pairing.agentToken), false);
 
+  adapter.emit('event', {
+    type: 'chat.assistant_delta',
+    payload: { threadId: 'thread:mock', turnId: 'turn:mock', itemId: 'item:invalid', delta: '' },
+  });
+  const containedEvent = socket.messages().at(-1);
+  assert.equal(containedEvent.type, 'run.failed');
+  assert.equal(containedEvent.payload.code, 'AGENT_EVENT_REJECTED');
+  assert.equal(socket.readyState, 1, 'A rejected Codex event must not close the relay socket.');
+
   const lastAcceptedSequence = socket.messages().at(-1).sequence;
   socket.readyState = 3;
   adapter.emit('event', {
