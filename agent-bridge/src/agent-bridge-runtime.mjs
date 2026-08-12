@@ -41,6 +41,7 @@ export class AgentBridgeRuntime {
     this.resumeSeen = false;
     this.lastReadySequence = -1;
     this.cadApprovalDecisions = new Map();
+    this.loginRecovery = null;
     this.started = false;
     this.closed = false;
     this.boundMessage = (data) => {
@@ -191,7 +192,8 @@ export class AgentBridgeRuntime {
       if (descriptor.type === 'account.updated') {
         this.account = descriptor.payload;
         this.#sendDescriptor(descriptor);
-        if (!this.account.requiresOpenaiAuth) this.#sendReady();
+        if (this.account.requiresOpenaiAuth) this.#beginLoginRecovery();
+        else this.#sendReady();
         return;
       }
       if (descriptor.type === 'thread.started') this.activeThreadId = descriptor.payload.threadId;
@@ -204,6 +206,27 @@ export class AgentBridgeRuntime {
     } catch (error) {
       this.#sendFailure(error, true, 'AGENT_EVENT_REJECTED');
     }
+  }
+
+  #beginLoginRecovery() {
+    if (this.closed || this.loginRecovery) return;
+    const recovery = (async () => {
+      try {
+        const login = await this.adapter.startDeviceCodeLogin();
+        this.#sendFailure(
+          new Error(`Codex sign-in expired. Open ${login.verificationUrl} and enter code ${login.userCode}.`),
+          true,
+          'CODEX_LOGIN_REQUIRED',
+        );
+        await login.completion;
+      } catch (error) {
+        this.#sendFailure(error, true, 'CODEX_LOGIN_FAILED');
+      }
+    })();
+    this.loginRecovery = recovery;
+    recovery.finally(() => {
+      if (this.loginRecovery === recovery) this.loginRecovery = null;
+    });
   }
 
   async #respondToCadApproval({ approvalId, decision }) {
@@ -242,7 +265,7 @@ export class AgentBridgeRuntime {
     const envelope = this.#sendDescriptor({
       type: 'bridge.ready',
       payload: {
-        bridge: { name: 'tunacad-agent-bridge', version: '0.2.6', platform: process.platform },
+        bridge: { name: 'tunacad-agent-bridge', version: '0.2.7', platform: process.platform },
         agent: { name: 'Codex App Server', version: this.agentVersion },
         supportedProtocols: ['tunacad.agent-bridge/1'],
         lastAcceptedSequence: this.lastBrowserSequence,

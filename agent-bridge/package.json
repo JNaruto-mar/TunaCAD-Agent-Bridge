@@ -1,6 +1,6 @@
 {
   "name": "@tunacad/agent-bridge",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Local authenticated bridge between TunaCAD browser workspaces and Codex App Server.",
   "license": "UNLICENSED",
   "type": "module",

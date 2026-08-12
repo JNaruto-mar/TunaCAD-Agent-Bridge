@@ -287,6 +287,7 @@ const runFailed = envelope('run.failed', z.object({
   code: z.string().min(1).max(120).regex(/^[A-Z0-9_]+$/),
   message: boundedText(2_000),
   retryable: z.boolean(),
+  retryAfterMs: z.number().int().min(1_000).max(15 * 60_000).optional(),
   correlationId: opaqueId,
 }).strict());
 

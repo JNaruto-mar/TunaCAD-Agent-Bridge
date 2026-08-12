@@ -162,16 +162,29 @@ export function mapCodexNotification(message, context = {}) {
     ];
   }
   if (message.method === 'error') {
+    const retryAfterMs = normalizeRetryAfterMs(
+      params.error?.retryAfterMs
+      ?? params.error?.retry_after_ms
+      ?? params.retryAfterMs
+      ?? params.retry_after_ms,
+    );
     return [event('run.failed', {
       threadId: params.threadId ? requiredId(params.threadId, 'thread ID') : null,
       turnId: params.turnId ? requiredId(params.turnId, 'turn ID') : null,
       code: text(params.error?.code ?? 'CODEX_ERROR', 120)?.toUpperCase().replace(/[^A-Z0-9_]/g, '_') || 'CODEX_ERROR',
       message: text(params.error?.message ?? params.message, 2_000) ?? 'Codex App Server reported an error.',
       retryable: Boolean(params.retryable),
+      ...(retryAfterMs ? { retryAfterMs } : {}),
       correlationId: requiredId(context.correlationId ?? 'codex:error', 'correlation ID'),
     })];
   }
   return [];
+}
+
+function normalizeRetryAfterMs(value) {
+  const milliseconds = Number(value);
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return undefined;
+  return Math.min(15 * 60_000, Math.max(1_000, Math.round(milliseconds)));
 }
 
 const defaultOptions = [

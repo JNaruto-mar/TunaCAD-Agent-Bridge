@@ -32,6 +32,41 @@ class FakeRelaySocket extends EventEmitter {
   }
 }
 
+class MidSessionLoginAdapter extends EventEmitter {
+  constructor() {
+    super();
+    this.loginStarts = 0;
+    this.resolveLogin = null;
+  }
+
+  async connect() {
+    return {
+      version: '0.147.0',
+      initialized: { userAgent: 'mid-session-login-fixture' },
+      account: { authMode: 'chatgpt', planType: 'fixture', requiresOpenaiAuth: false },
+    };
+  }
+
+  async startDeviceCodeLogin() {
+    this.loginStarts += 1;
+    const completion = new Promise((resolve) => { this.resolveLogin = resolve; });
+    return {
+      loginId: '6deca20b-f0bd-427c-8e5c-fbe7fcbab265',
+      verificationUrl: 'https://auth.openai.com/codex/device',
+      userCode: 'MID-LOGIN',
+      completion,
+    };
+  }
+
+  completeLogin() {
+    const account = { authMode: 'chatgpt', planType: 'fixture', requiresOpenaiAuth: false };
+    this.emit('event', { type: 'account.updated', payload: account });
+    this.resolveLogin?.({ account });
+  }
+
+  async close() {}
+}
+
 const sessionId = 'af851c18-29a7-4ae3-98d8-a83d28ee936b';
 const pairing = Object.freeze({
   sessionId,
@@ -284,6 +319,33 @@ try {
   assert.equal(loginSocket.sent.join('').includes(pairing.agentToken), false);
 } finally {
   await loginRuntime.close();
+}
+
+const midSessionSocket = new FakeRelaySocket();
+const midSessionAdapter = new MidSessionLoginAdapter();
+const midSessionRuntime = new AgentBridgeRuntime({ pairing, socket: midSessionSocket, adapter: midSessionAdapter });
+try {
+  assert.equal((await midSessionRuntime.start()).status, 'ready');
+  const initialReadyCount = midSessionSocket.types().filter((type) => type === 'bridge.ready').length;
+  midSessionAdapter.emit('event', {
+    type: 'account.updated',
+    payload: { authMode: null, planType: null, requiresOpenaiAuth: true },
+  });
+  const loginFailure = await waitForSent(
+    midSessionSocket,
+    (message) => message.type === 'run.failed' && message.payload.code === 'CODEX_LOGIN_REQUIRED',
+  );
+  assert.match(loginFailure.payload.message, /MID-LOGIN/);
+  assert.equal(midSessionAdapter.loginStarts, 1);
+  midSessionAdapter.emit('event', {
+    type: 'account.updated',
+    payload: { authMode: null, planType: null, requiresOpenaiAuth: true },
+  });
+  assert.equal(midSessionAdapter.loginStarts, 1);
+  midSessionAdapter.completeLogin();
+  await waitForMessageCount(midSessionSocket, 'bridge.ready', initialReadyCount + 1);
+} finally {
+  await midSessionRuntime.close();
 }
 
 const cancellationAdapter = new CodexAppServerAdapter({
