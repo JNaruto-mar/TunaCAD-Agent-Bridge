@@ -38,6 +38,8 @@ export class AgentBridgeRuntime {
     this.activeThreadId = null;
     this.activeTurnId = null;
     this.replayOnNextResume = false;
+    this.resumeSeen = false;
+    this.lastReadySequence = -1;
     this.cadApprovalDecisions = new Map();
     this.started = false;
     this.closed = false;
@@ -95,14 +97,23 @@ export class AgentBridgeRuntime {
     this.#cursorChanged();
 
     switch (message.type) {
-      case 'session.resume':
+      case 'session.resume': {
         this.#acknowledgeOutgoing(message.payload.lastAcceptedSequence);
+        const refreshReady = this.replayOnNextResume
+          || this.resumeSeen
+          || message.payload.lastAcceptedSequence < this.lastReadySequence;
         if (this.replayOnNextResume) {
           this.replayOnNextResume = false;
           this.#replayUnacknowledged();
-          this.#sendReady();
         }
+        this.resumeSeen = true;
+        // A browser tab reload keeps the companion socket alive, so it does not
+        // pass through replaceSocket(). Refresh readiness for subsequent resumes
+        // (or a missed startup frame), but do not add noise to the normal initial
+        // handshake. Buffered frames remain replacement-socket-only.
+        if (refreshReady) this.#sendReady();
         return;
+      }
       case 'heartbeat.pong':
         this.lastHeartbeatAt = this.now().getTime();
         return;
@@ -228,15 +239,16 @@ export class AgentBridgeRuntime {
 
   #sendReady() {
     if (!this.agentVersion || this.account?.requiresOpenaiAuth) return;
-    this.#sendDescriptor({
+    const envelope = this.#sendDescriptor({
       type: 'bridge.ready',
       payload: {
-        bridge: { name: 'tunacad-agent-bridge', version: '0.2.5', platform: process.platform },
+        bridge: { name: 'tunacad-agent-bridge', version: '0.2.6', platform: process.platform },
         agent: { name: 'Codex App Server', version: this.agentVersion },
         supportedProtocols: ['tunacad.agent-bridge/1'],
         lastAcceptedSequence: this.lastBrowserSequence,
       },
     });
+    this.lastReadySequence = envelope.sequence;
   }
 
   #sendFailure(error, retryable = true, code = 'AGENT_BRIDGE_ERROR') {
@@ -267,6 +279,7 @@ export class AgentBridgeRuntime {
     this.#rememberOutgoing(envelope.sequence, serialized);
     if (this.socket.readyState === 1) this.socket.send(serialized);
     this.#cursorChanged();
+    return envelope;
   }
 
   #rememberOutgoing(sequence, serialized) {

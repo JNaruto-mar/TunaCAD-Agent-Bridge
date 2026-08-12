@@ -113,15 +113,27 @@ try {
 
   const initialStartupCount = socket.messages().length;
   await runtime.handleBrowserMessage(browserMessage('session.resume', {
-    lastAcceptedSequence: -1,
+    lastAcceptedSequence: socket.messages().at(-1).sequence,
     supportedProtocols: ['tunacad.agent-bridge/1'],
     client: { name: 'tunacad-browser', version: '0.1.0', platform: 'test' },
   }));
   assert.equal(
     socket.messages().length,
     initialStartupCount,
-    'The initial resume handshake must not replay startup frames already sent on the same socket.',
+    'The initial browser resume must not replay or duplicate startup frames.',
   );
+  assert.equal(
+    socket.messages().filter((message) => message.type === 'account.updated').length,
+    1,
+    'The initial resume handshake must not replay startup account frames already sent on the same socket.',
+  );
+  await runtime.handleBrowserMessage(browserMessage('session.resume', {
+    lastAcceptedSequence: socket.messages().at(-1).sequence,
+    supportedProtocols: ['tunacad.agent-bridge/1'],
+    client: { name: 'tunacad-browser', version: '0.1.0', platform: 'test-reload' },
+  }));
+  assert.equal(socket.messages().length, initialStartupCount + 1, 'A same-runtime tab reload must refresh bridge.ready.');
+  assert.equal(socket.messages().at(-1).type, 'bridge.ready');
 
   await runtime.handleBrowserMessage(browserMessage('thread.start', {}));
   await waitForSent(socket, (message) => message.type === 'thread.started');
