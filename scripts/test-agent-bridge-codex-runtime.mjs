@@ -111,6 +111,18 @@ try {
     uuid: () => `10000000-0000-4000-8000-${String(browserSequence).padStart(12, '0')}`,
   }));
 
+  const initialStartupCount = socket.messages().length;
+  await runtime.handleBrowserMessage(browserMessage('session.resume', {
+    lastAcceptedSequence: -1,
+    supportedProtocols: ['tunacad.agent-bridge/1'],
+    client: { name: 'tunacad-browser', version: '0.1.0', platform: 'test' },
+  }));
+  assert.equal(
+    socket.messages().length,
+    initialStartupCount,
+    'The initial resume handshake must not replay startup frames already sent on the same socket.',
+  );
+
   await runtime.handleBrowserMessage(browserMessage('thread.start', {}));
   await waitForSent(socket, (message) => message.type === 'thread.started');
   const threadEventCount = socket.messages().filter((message) => message.type === 'thread.started').length;

@@ -37,6 +37,7 @@ export class AgentBridgeRuntime {
     this.agentVersion = null;
     this.activeThreadId = null;
     this.activeTurnId = null;
+    this.replayOnNextResume = false;
     this.cadApprovalDecisions = new Map();
     this.started = false;
     this.closed = false;
@@ -96,8 +97,11 @@ export class AgentBridgeRuntime {
     switch (message.type) {
       case 'session.resume':
         this.#acknowledgeOutgoing(message.payload.lastAcceptedSequence);
-        this.#replayUnacknowledged();
-        this.#sendReady();
+        if (this.replayOnNextResume) {
+          this.replayOnNextResume = false;
+          this.#replayUnacknowledged();
+          this.#sendReady();
+        }
         return;
       case 'heartbeat.pong':
         this.lastHeartbeatAt = this.now().getTime();
@@ -150,6 +154,7 @@ export class AgentBridgeRuntime {
     this.socket.off?.('message', this.boundMessage);
     this.socket = socket;
     this.socket.on('message', this.boundMessage);
+    this.replayOnNextResume = true;
   }
 
   cursorSnapshot() {
@@ -226,10 +231,10 @@ export class AgentBridgeRuntime {
     this.#sendDescriptor({
       type: 'bridge.ready',
       payload: {
-        bridge: { name: 'tunacad-agent-bridge', version: '0.2.4', platform: process.platform },
+        bridge: { name: 'tunacad-agent-bridge', version: '0.2.5', platform: process.platform },
         agent: { name: 'Codex App Server', version: this.agentVersion },
         supportedProtocols: ['tunacad.agent-bridge/1'],
-        lastAcceptedSequence: this.lastBrowserSequence < 0 ? 0 : this.lastBrowserSequence,
+        lastAcceptedSequence: this.lastBrowserSequence,
       },
     });
   }

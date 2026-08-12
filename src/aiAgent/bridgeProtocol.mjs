@@ -77,6 +77,7 @@ const turnRef = { ...threadRef, turnId: opaqueId };
 const toolRef = { ...turnRef, toolCallId: opaqueId, toolName: z.string().min(1).max(160) };
 const proposalRef = { proposalId: opaqueId };
 const requestId = z.string().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9_.:-]*$/);
+const acceptedSequence = z.number().int().min(-1).max(Number.MAX_SAFE_INTEGER);
 
 const envelope = (type, payload) => z.object({
   protocol,
@@ -90,7 +91,7 @@ const envelope = (type, payload) => z.object({
 }).strict();
 
 const sessionResume = envelope('session.resume', z.object({
-  lastAcceptedSequence: sequence,
+  lastAcceptedSequence: acceptedSequence,
   supportedProtocols: z.array(protocol).length(1),
   client: clientInfo,
 }).strict());
@@ -137,7 +138,7 @@ const bridgeReady = envelope('bridge.ready', z.object({
   bridge: clientInfo,
   agent: z.object({ name: z.string().min(1).max(80), version: z.string().min(1).max(40) }).strict(),
   supportedProtocols: z.array(protocol).length(1),
-  lastAcceptedSequence: sequence,
+  lastAcceptedSequence: acceptedSequence,
 }).strict());
 
 const accountUpdated = envelope('account.updated', z.object({

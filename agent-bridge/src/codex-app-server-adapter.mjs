@@ -60,7 +60,7 @@ export class CodexAppServerAdapter extends EventEmitter {
       const initialized = await client.start({
         name: 'tunacad_agent_bridge',
         title: 'TunaCAD Agent Bridge',
-        version: '0.2.4',
+        version: '0.2.5',
       });
       const accountResult = await client.request('account/read', { refreshToken: false });
       const configResult = await client.request('config/read', { includeLayers: false });
