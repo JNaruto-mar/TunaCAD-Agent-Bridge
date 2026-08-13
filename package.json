@@ -4,10 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "npm run test:runtime && npm run test:resilience && npm run test:package",
+    "test": "npm run test:runtime && npm run test:resilience && npm run test:package && npm run test:distribution",
     "test:runtime": "node scripts/test-agent-bridge-codex-runtime.mjs",
     "test:resilience": "node scripts/test-agent-bridge-resilience.mjs",
     "test:package": "node scripts/test-agent-bridge-package-artifact.mjs",
+    "test:distribution": "node scripts/test-agent-bridge-distribution.mjs",
+    "build:release": "node scripts/build-agent-bridge-release.mjs",
+    "verify:release": "node scripts/verify-agent-bridge-release.mjs",
     "benchmark:relay": "node scripts/benchmark-ai-agent-relay-resilience.mjs"
   },
   "dependencies": {

@@ -1,27 +1,71 @@
-name: Publish Agent Bridge
+name: Publish signed Agent Bridge release
 
 on:
-  workflow_dispatch:
   release:
     types: [published]
 
 permissions:
   contents: read
   id-token: write
+  attestations: write
 
 jobs:
   publish:
+    if: github.repository == 'JNaruto-mar/TunaCAD-Agent-Bridge'
     runs-on: ubuntu-latest
+    environment: agent-bridge-production
     steps:
       - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name }}
       - uses: actions/setup-node@v6
         with:
           node-version: 24
           registry-url: https://registry.npmjs.org
-          cache: npm
-      - run: npm ci
-      - run: npm test
-      - run: npm publish --access public --provenance
-        working-directory: agent-bridge
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          package-manager-cache: false
+      - name: Install exact repository dependencies
+        run: npm ci
+      - name: Install current npm for trusted publishing and provenance verification
+        run: npm install --global npm@latest
+      - name: Validate package and distribution fixtures
+        run: npm test
+      - name: Require an unchanged tagged source checkout
+        run: git diff --exit-code
+      - name: Read exact package metadata
+        id: package
+        shell: bash
+        run: |
+          version="$(node -p "require('./agent-bridge/package.json').version")"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tarball=artifacts/agent-bridge-release/tunacad-agent-bridge-$version.tgz" >> "$GITHUB_OUTPUT"
+      - name: Build immutable release candidate
+        run: >-
+          node scripts/build-agent-bridge-release.mjs
+          --output artifacts/agent-bridge-release
+          --source-commit "${{ github.sha }}"
+          --release-tag "${{ github.event.release.tag_name }}"
+      - name: Attest npm tarball to this public repository and workflow
+        uses: actions/attest@v4
+        with:
+          subject-path: ${{ steps.package.outputs.tarball }}
+      - name: Attest allowlisted release manifest
+        uses: actions/attest@v4
+        with:
+          subject-path: artifacts/agent-bridge-release/agent-bridge-release-manifest.json
+      - name: Publish exact tarball through npm trusted publishing
+        run: npm publish "${{ steps.package.outputs.tarball }}" --access public
+      - name: Verify published registry signatures and Sigstore provenance
+        shell: bash
+        run: |
+          mkdir -p .tmp/agent-bridge-published-verification
+          cd .tmp/agent-bridge-published-verification
+          npm init --yes
+          npm install --save-exact --ignore-scripts "@tunacad/agent-bridge@${{ steps.package.outputs.version }}"
+          npm audit signatures
+      - name: Upload signed release subjects
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-bridge-${{ steps.package.outputs.version }}-signed-release
+          path: artifacts/agent-bridge-release/
+          if-no-files-found: error
+          retention-days: 90
