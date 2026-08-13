@@ -69,8 +69,14 @@ try {
   };
   assert.deepEqual(parseNpmPackMetadata(JSON.stringify([npmPackFixture])), npmPackFixture);
   assert.deepEqual(parseNpmPackMetadata(JSON.stringify(npmPackFixture)), npmPackFixture);
+  assert.deepEqual(parseNpmPackMetadata(JSON.stringify({
+    '@tunacad/agent-bridge': npmPackFixture,
+  })), npmPackFixture);
   assert.throws(() => parseNpmPackMetadata('[]'), /exactly one package/);
   assert.throws(() => parseNpmPackMetadata('{}'), /invalid package metadata/);
+  assert.throws(() => parseNpmPackMetadata(JSON.stringify({
+    'wrong-package': npmPackFixture,
+  })), /package key/);
 
   await writeFile(path.resolve(temporaryRoot, 'preserved-codex-config.toml'), 'model = "unchanged"\n', 'utf8');
   await writeFile(path.resolve(temporaryRoot, 'preserved-cursor-state.json'), '{"schemaVersion":1,"sessions":{}}\n', 'utf8');

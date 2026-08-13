@@ -5,10 +5,22 @@ export const AGENT_BRIDGE_RELEASE_WORKFLOW = '.github/workflows/publish.yml';
 
 export function parseNpmPackMetadata(serialized) {
   const parsed = JSON.parse(serialized);
-  if (Array.isArray(parsed) && parsed.length !== 1) {
-    throw new Error('npm pack must describe exactly one package.');
+  let metadata;
+  if (Array.isArray(parsed)) {
+    if (parsed.length !== 1) throw new Error('npm pack must describe exactly one package.');
+    [metadata] = parsed;
+  } else if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    && typeof parsed.name === 'string') {
+    metadata = parsed;
+  } else if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+    const entries = Object.entries(parsed);
+    if (entries.length !== 1) throw new Error('npm pack must describe exactly one package.');
+    const [packageName, packageMetadata] = entries[0];
+    if (packageMetadata?.name !== packageName) {
+      throw new Error('npm pack package key does not match its metadata.');
+    }
+    metadata = packageMetadata;
   }
-  const metadata = Array.isArray(parsed) ? parsed[0] : parsed;
   if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)
     || typeof metadata.name !== 'string'
     || typeof metadata.version !== 'string'
