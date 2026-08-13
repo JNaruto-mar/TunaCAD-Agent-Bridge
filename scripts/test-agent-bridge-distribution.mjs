@@ -104,6 +104,8 @@ try {
   assert.match(workflow, /attestations:\s*write/);
   assert.match(workflow, /actions\/attest@v4/);
   assert.match(workflow, /environment:\s*agent-bridge-production/);
+  assert.match(workflow, /npm@11\.19\.0/);
+  assert.doesNotMatch(workflow, /npm@latest/);
   assert.match(workflow, /npm publish/);
   assert.match(workflow, /npm audit signatures/);
   assert.doesNotMatch(workflow, /NPM_TOKEN|NODE_AUTH_TOKEN/);
