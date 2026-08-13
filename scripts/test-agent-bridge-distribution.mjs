@@ -73,7 +73,7 @@ try {
     '@tunacad/agent-bridge': npmPackFixture,
   })), npmPackFixture);
   assert.throws(() => parseNpmPackMetadata('[]'), /exactly one package/);
-  assert.throws(() => parseNpmPackMetadata('{}'), /invalid package metadata/);
+  assert.throws(() => parseNpmPackMetadata('{}'), /exactly one package/);
   assert.throws(() => parseNpmPackMetadata(JSON.stringify({
     'wrong-package': npmPackFixture,
   })), /package key/);
