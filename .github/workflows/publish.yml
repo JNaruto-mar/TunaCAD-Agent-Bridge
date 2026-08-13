@@ -56,14 +56,6 @@ jobs:
           subject-path: artifacts/agent-bridge-release/agent-bridge-release-manifest.json
       - name: Publish exact tarball through npm trusted publishing
         run: npm publish "${{ steps.package.outputs.tarball }}" --access public
-      - name: Verify published registry signatures and Sigstore provenance
-        shell: bash
-        run: |
-          mkdir -p .tmp/agent-bridge-published-verification
-          cd .tmp/agent-bridge-published-verification
-          npm init --yes
-          npm install --save-exact --ignore-scripts "@tunacad/agent-bridge@${{ steps.package.outputs.version }}"
-          npm audit signatures
       - name: Upload signed release subjects
         uses: actions/upload-artifact@v4
         with:
@@ -71,3 +63,22 @@ jobs:
           path: artifacts/agent-bridge-release/
           if-no-files-found: error
           retention-days: 90
+      - name: Verify published registry signatures and Sigstore provenance
+        shell: bash
+        run: |
+          mkdir -p .tmp/agent-bridge-published-verification
+          cd .tmp/agent-bridge-published-verification
+          npm init --yes
+          npm install --save-exact --ignore-scripts "@tunacad/agent-bridge@${{ steps.package.outputs.version }}"
+          for attempt in 1 2 3 4 5 6; do
+            if npm audit signatures; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 6 ]; then
+              echo "Registry signature and provenance verification failed after $attempt attempts." >&2
+              exit 1
+            fi
+            delay_seconds=$((attempt * 5))
+            echo "Registry attestations are not available yet; retrying in ${delay_seconds}s (attempt $attempt/6)."
+            sleep "$delay_seconds"
+          done

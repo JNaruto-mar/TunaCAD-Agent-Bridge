@@ -108,6 +108,13 @@ try {
   assert.doesNotMatch(workflow, /npm@latest/);
   assert.match(workflow, /npm publish/);
   assert.match(workflow, /npm audit signatures/);
+  assert.match(workflow, /for attempt in 1 2 3 4 5 6/);
+  assert.match(workflow, /attempt \* 5/);
+  assert.ok(
+    workflow.indexOf('Upload signed release subjects')
+      < workflow.indexOf('Verify published registry signatures and Sigstore provenance'),
+    'Signed subjects must be uploaded before registry verification can be delayed or fail.',
+  );
   assert.doesNotMatch(workflow, /NPM_TOKEN|NODE_AUTH_TOKEN/);
 
   process.stdout.write('[agent-bridge] OIDC release, attestations, digest verification, exact update, and non-destructive uninstall fixtures passed.\n');
