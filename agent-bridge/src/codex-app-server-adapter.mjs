@@ -11,8 +11,25 @@ import {
 } from '../../src/aiAgent/codexEventMapper.mjs';
 import { CodexRequestTracker } from '../../src/aiAgent/codexRequestTracker.mjs';
 import { AGENT_BRIDGE_TIMING_POLICY } from '../../src/aiAgent/bridgeCompatibility.mjs';
+import {
+  createAgentAccountState,
+  createAgentAdapterCapabilities,
+  createAgentAuthenticationChallenge,
+  createAgentConnection,
+  createAgentThread,
+  createAgentTurn,
+} from './agent-adapter-contract.mjs';
 
 export const TUNACAD_MCP_TOKEN_ENVIRONMENT_VARIABLE = 'TUNACAD_MCP_AGENT_TOKEN';
+export const CODEX_AGENT_CAPABILITIES = createAgentAdapterCapabilities({
+  interactiveAuthentication: true,
+  threadResume: true,
+  turnSteering: true,
+  turnCancellation: true,
+  approvalResponses: true,
+  userInputResponses: true,
+  cadOutcomeReporting: true,
+});
 
 export class CodexAppServerAdapter extends EventEmitter {
   constructor({
@@ -37,6 +54,7 @@ export class CodexAppServerAdapter extends EventEmitter {
     this.pendingRequestAliases = new Map();
     this.toolNames = new Map();
     this.pendingLogin = null;
+    this.capabilities = CODEX_AGENT_CAPABILITIES;
   }
 
   async connect() {
@@ -57,20 +75,19 @@ export class CodexAppServerAdapter extends EventEmitter {
       if (this.client === client) this.emit('exit', { code, signal });
     });
     try {
-      const initialized = await client.start({
+      await client.start({
         name: 'tunacad_agent_bridge',
         title: 'TunaCAD Agent Bridge',
-        version: '0.2.8',
+        version: '0.2.9',
       });
       const accountResult = await client.request('account/read', { refreshToken: false });
       const configResult = await client.request('config/read', { includeLayers: false });
       assertProcessScopedMcpConfig(configResult, this.pairing);
       this.account = normalizeAccountState(accountResult);
-      return {
-        version: this.version,
-        initialized,
+      return createAgentConnection({
+        agent: { id: 'codex-app-server', name: 'Codex App Server', version: this.version },
         account: this.account,
-      };
+      });
     } catch (error) {
       await client.close().catch(() => undefined);
       this.client = null;
@@ -80,16 +97,17 @@ export class CodexAppServerAdapter extends EventEmitter {
 
   async startThread(options = {}) {
     const client = this.#requiredClient();
-    return client.request('thread/start', {
+    const result = await client.request('thread/start', {
       cwd: this.cwd,
       ephemeral: false,
       serviceName: 'tunacad_agent_bridge',
       ...(options.model ? { model: options.model } : {}),
       ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
     });
+    return createAgentThread({ threadId: result?.thread?.id, resumed: false });
   }
 
-  async startDeviceCodeLogin({ timeoutMs = AGENT_BRIDGE_TIMING_POLICY.loginCompletionTimeoutMs } = {}) {
+  async beginAuthentication({ timeoutMs = AGENT_BRIDGE_TIMING_POLICY.loginCompletionTimeoutMs } = {}) {
     if (this.pendingLogin) throw new Error('A Codex login is already in progress.');
     const client = this.#requiredClient();
     const started = normalizeDeviceCodeLogin(await client.request('account/login/start', {
@@ -101,33 +119,50 @@ export class CodexAppServerAdapter extends EventEmitter {
       () => { if (this.pendingLogin?.completion === completion) this.pendingLogin = null; },
       () => { if (this.pendingLogin?.completion === completion) this.pendingLogin = null; },
     );
-    return Object.freeze({ ...started, completion });
-  }
-
-  async cancelDeviceCodeLogin(loginId = this.pendingLogin?.loginId) {
-    if (!loginId || loginId !== this.pendingLogin?.loginId) {
-      throw new Error('Unknown or completed Codex login attempt.');
-    }
-    await this.#requiredClient().request('account/login/cancel', { loginId });
-  }
-
-  async resumeThread(threadId) {
-    return this.#requiredClient().request('thread/resume', { threadId });
-  }
-
-  async startTurn(threadId, content) {
-    return this.#requiredClient().request('turn/start', {
-      threadId,
-      input: [{ type: 'text', text: requiredPrompt(content) }],
+    return createAgentAuthenticationChallenge({
+      authenticationId: started.loginId,
+      verificationUrl: started.verificationUrl,
+      userCode: started.userCode,
+      completion,
     });
   }
 
+  async cancelAuthentication(authenticationId = this.pendingLogin?.loginId) {
+    if (!authenticationId || authenticationId !== this.pendingLogin?.loginId) {
+      throw new Error('Unknown or completed Codex login attempt.');
+    }
+    await this.#requiredClient().request('account/login/cancel', { loginId: authenticationId });
+  }
+
+  async startDeviceCodeLogin(options) {
+    const challenge = await this.beginAuthentication(options);
+    return Object.freeze({ ...challenge, loginId: challenge.authenticationId });
+  }
+
+  async cancelDeviceCodeLogin(loginId) {
+    return this.cancelAuthentication(loginId);
+  }
+
+  async resumeThread(threadId) {
+    const result = await this.#requiredClient().request('thread/resume', { threadId });
+    return createAgentThread({ threadId: result?.thread?.id ?? threadId, resumed: true });
+  }
+
+  async startTurn(threadId, content) {
+    const result = await this.#requiredClient().request('turn/start', {
+      threadId,
+      input: [{ type: 'text', text: requiredPrompt(content) }],
+    });
+    return createAgentTurn({ threadId, turnId: result?.turn?.id ?? result?.turnId });
+  }
+
   async steerTurn(threadId, turnId, content) {
-    return this.#requiredClient().request('turn/steer', {
+    const result = await this.#requiredClient().request('turn/steer', {
       threadId,
       expectedTurnId: turnId,
       input: [{ type: 'text', text: requiredPrompt(content) }],
     });
+    return createAgentTurn({ threadId, turnId: result?.turn?.id ?? result?.turnId ?? turnId });
   }
 
   async cancelTurn(threadId, turnId) {
@@ -180,6 +215,7 @@ export class CodexAppServerAdapter extends EventEmitter {
   #onNotification(message) {
     if (message.method === 'account/updated') {
       this.account = normalizeAccountNotification(message.params);
+      this.emit('event', { type: 'account.updated', payload: this.account });
     }
     if (message.method === 'serverRequest/resolved') {
       try {
@@ -192,7 +228,7 @@ export class CodexAppServerAdapter extends EventEmitter {
             if (entry === request) this.pendingRequestAliases.delete(alias);
           }
         }
-        if (resolved.descriptor) this.emit('event', resolved.descriptor);
+        if (resolved.descriptor) this.emit('event', toContractEvent(resolved.descriptor));
         this.emit('timing', resolved.timing);
       } catch (error) {
         this.emit('error', error);
@@ -205,10 +241,11 @@ export class CodexAppServerAdapter extends EventEmitter {
     }
     for (const descriptor of mapCodexNotification(message, {
       toolNames: this.toolNames,
-      requiresOpenaiAuth: this.account?.requiresOpenaiAuth,
+      requiresOpenaiAuth: this.account?.requiresAuthentication,
       correlationId: `codex:${message.params?.turnId ?? message.params?.turn?.id ?? 'event'}`,
     })) {
-      this.emit('event', descriptor);
+      if (descriptor.type === 'account.updated') continue;
+      this.emit('event', toContractEvent(descriptor));
     }
   }
 
@@ -219,7 +256,7 @@ export class CodexAppServerAdapter extends EventEmitter {
       this.pendingRequests.set(key, request);
       const alias = descriptor.payload.approvalId ?? descriptor.payload.inputRequestId;
       if (alias) this.pendingRequestAliases.set(alias, request);
-      this.emit('event', descriptor);
+      this.emit('event', toContractEvent(descriptor));
     } catch (error) {
       this.emit('error', error);
     }
@@ -247,7 +284,7 @@ export class CodexAppServerAdapter extends EventEmitter {
       (message) => message.method === 'account/updated' && message.params?.authMode !== null,
       AGENT_BRIDGE_TIMING_POLICY.requestTimeoutMs,
     );
-    if (!this.account || this.account.requiresOpenaiAuth) {
+    if (!this.account || this.account.requiresAuthentication) {
       throw new Error('Codex reported login completion without an authenticated account.');
     }
     return Object.freeze({ loginId: login.loginId, account: this.account });
@@ -287,19 +324,19 @@ function normalizeAccountState(accountResult) {
   const account = accountResult?.account ?? null;
   const type = account?.type;
   const authMode = type === 'chatgpt' ? 'chatgpt' : type === 'apiKey' ? 'apikey' : null;
-  return {
+  return createAgentAccountState({
     authMode,
     planType: account?.planType ?? accountResult?.planType ?? null,
-    requiresOpenaiAuth: Boolean(accountResult?.requiresOpenaiAuth && !account),
-  };
+    requiresAuthentication: Boolean(accountResult?.requiresOpenaiAuth && !account),
+  });
 }
 
 function normalizeAccountNotification(params = {}) {
-  return {
+  return createAgentAccountState({
     authMode: params.authMode ?? null,
     planType: params.planType ?? null,
-    requiresOpenaiAuth: params.authMode == null,
-  };
+    requiresAuthentication: params.authMode == null,
+  });
 }
 
 export function normalizeDeviceCodeLogin(result) {
@@ -326,6 +363,10 @@ export function normalizeDeviceCodeLogin(result) {
 function requiredPrompt(content) {
   if (typeof content !== 'string' || !content.trim()) throw new Error('A non-empty Codex prompt is required.');
   return content;
+}
+
+function toContractEvent(descriptor) {
+  return Object.freeze({ type: descriptor.type, payload: descriptor.payload });
 }
 
 export function createCadApprovalOutcomePrompt({ proposalId, decision }) {

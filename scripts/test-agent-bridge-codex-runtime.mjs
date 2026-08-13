@@ -3,6 +3,13 @@ import { EventEmitter } from 'node:events';
 import { fileURLToPath } from 'node:url';
 import { AgentBridgeRuntime } from '../agent-bridge/src/agent-bridge-runtime.mjs';
 import {
+  createAgentAccountState,
+  createAgentAdapterCapabilities,
+  createAgentConnection,
+  createAgentThread,
+  createAgentTurn,
+} from '../agent-bridge/src/agent-adapter-contract.mjs';
+import {
   CodexAppServerAdapter,
   TUNACAD_MCP_TOKEN_ENVIRONMENT_VARIABLE,
   createCadApprovalOutcomePrompt,
@@ -11,6 +18,8 @@ import {
 } from '../agent-bridge/src/codex-app-server-adapter.mjs';
 import { CodexAppServerClient } from './lib/codex-app-server-client.mjs';
 import { createAgentBridgeEnvelope } from '../src/aiAgent/bridgeProtocol.mjs';
+
+const FIXTURE_TIMEOUT_MS = process.env.TUNACAD_PHASE34_QUALIFICATION === '1' ? 10_000 : 2_000;
 
 class FakeRelaySocket extends EventEmitter {
   constructor() {
@@ -35,23 +44,23 @@ class FakeRelaySocket extends EventEmitter {
 class MidSessionLoginAdapter extends EventEmitter {
   constructor() {
     super();
+    this.capabilities = createAgentAdapterCapabilities({ interactiveAuthentication: true });
     this.loginStarts = 0;
     this.resolveLogin = null;
   }
 
   async connect() {
-    return {
-      version: '0.147.0',
-      initialized: { userAgent: 'mid-session-login-fixture' },
-      account: { authMode: 'chatgpt', planType: 'fixture', requiresOpenaiAuth: false },
-    };
+    return createAgentConnection({
+      agent: { id: 'fixture-agent', name: 'Fixture Agent', version: '1.0.0' },
+      account: { authMode: 'chatgpt', planType: 'fixture', requiresAuthentication: false },
+    });
   }
 
-  async startDeviceCodeLogin() {
+  async beginAuthentication() {
     this.loginStarts += 1;
     const completion = new Promise((resolve) => { this.resolveLogin = resolve; });
     return {
-      loginId: '6deca20b-f0bd-427c-8e5c-fbe7fcbab265',
+      authenticationId: '6deca20b-f0bd-427c-8e5c-fbe7fcbab265',
       verificationUrl: 'https://auth.openai.com/codex/device',
       userCode: 'MID-LOGIN',
       completion,
@@ -59,10 +68,15 @@ class MidSessionLoginAdapter extends EventEmitter {
   }
 
   completeLogin() {
-    const account = { authMode: 'chatgpt', planType: 'fixture', requiresOpenaiAuth: false };
+    const account = createAgentAccountState({
+      authMode: 'chatgpt', planType: 'fixture', requiresAuthentication: false,
+    });
     this.emit('event', { type: 'account.updated', payload: account });
     this.resolveLogin?.({ account });
   }
+
+  async startThread() { return createAgentThread({ threadId: 'thread:fixture' }); }
+  async startTurn(threadId) { return createAgentTurn({ threadId, turnId: 'turn:fixture' }); }
 
   async close() {}
 }
@@ -97,7 +111,7 @@ const adapter = new CodexAppServerAdapter({
       command: process.execPath,
       args: [fixture],
       env: options.env,
-      requestTimeoutMs: 2_000,
+      requestTimeoutMs: FIXTURE_TIMEOUT_MS,
     });
   },
 });
@@ -123,9 +137,9 @@ const runtime = new AgentBridgeRuntime({
 try {
   const started = await runtime.start();
   assert.equal(started.status, 'ready');
-  assert.equal(started.version, '0.147.0');
+  assert.equal(started.agent.version, '0.147.0');
   assert.equal(started.account.authMode, 'chatgpt');
-  assert.equal(started.account.requiresOpenaiAuth, false);
+  assert.equal(started.account.requiresAuthentication, false);
   assert.equal(launchOptions.env[TUNACAD_MCP_TOKEN_ENVIRONMENT_VARIABLE], pairing.agentToken);
   assert.equal(JSON.stringify(launchOptions.args).includes(pairing.agentToken), false);
   assert.deepEqual(launchOptions.args, createCodexLaunchArguments(pairing.mcpUrl));
@@ -188,7 +202,7 @@ try {
   assert.ok(socket.types().includes('chat.assistant_delta'));
   assert.deepEqual(
     await adapter.steerTurn('thread:mock', 'turn:mock', 'Focus on the requested validation.'),
-    { turnId: 'turn:mock' },
+    { threadId: 'thread:mock', turnId: 'turn:mock' },
   );
 
   const cadProposalId = 'cadprop_20000000-0000-4000-8000-000000000033';
@@ -299,7 +313,7 @@ const loginRuntime = new AgentBridgeRuntime({
       command: process.execPath,
       args: [fixture],
       env: { ...options.env, TUNACAD_MOCK_LOGIN_REQUIRED: '1' },
-      requestTimeoutMs: 2_000,
+      requestTimeoutMs: FIXTURE_TIMEOUT_MS,
     }),
   }),
 });
@@ -309,11 +323,11 @@ try {
   assert.equal(loginRequired.login.verificationUrl, 'https://auth.openai.com/codex/device');
   assert.equal(loginRequired.login.userCode, 'TUNA-CAD1');
   assert.deepEqual(loginSocket.types().slice(0, 2), ['account.updated', 'run.failed']);
-  assert.equal(loginSocket.messages()[1].payload.code, 'CODEX_LOGIN_REQUIRED');
+  assert.equal(loginSocket.messages()[1].payload.code, 'AGENT_AUTHENTICATION_REQUIRED');
   assert.match(loginSocket.messages()[1].payload.message, /TUNA-CAD1/);
   const loginCompleted = await loginRequired.login.completion;
   assert.equal(loginCompleted.account.authMode, 'chatgpt');
-  assert.equal(loginCompleted.account.requiresOpenaiAuth, false);
+  assert.equal(loginCompleted.account.requiresAuthentication, false);
   await waitForSent(loginSocket, (message) => message.type === 'bridge.ready');
   assert.ok(loginSocket.types().includes('account.updated'));
   assert.equal(loginSocket.sent.join('').includes(pairing.agentToken), false);
@@ -329,17 +343,17 @@ try {
   const initialReadyCount = midSessionSocket.types().filter((type) => type === 'bridge.ready').length;
   midSessionAdapter.emit('event', {
     type: 'account.updated',
-    payload: { authMode: null, planType: null, requiresOpenaiAuth: true },
+    payload: { authMode: null, planType: null, requiresAuthentication: true },
   });
   const loginFailure = await waitForSent(
     midSessionSocket,
-    (message) => message.type === 'run.failed' && message.payload.code === 'CODEX_LOGIN_REQUIRED',
+    (message) => message.type === 'run.failed' && message.payload.code === 'AGENT_AUTHENTICATION_REQUIRED',
   );
   assert.match(loginFailure.payload.message, /MID-LOGIN/);
-  assert.equal(midSessionAdapter.loginStarts, 1);
+  assert.equal(midSessionAdapter.loginStarts, 1, 'Repeated account notifications must share one login recovery.');
   midSessionAdapter.emit('event', {
     type: 'account.updated',
-    payload: { authMode: null, planType: null, requiresOpenaiAuth: true },
+    payload: { authMode: null, planType: null, requiresAuthentication: true },
   });
   assert.equal(midSessionAdapter.loginStarts, 1);
   midSessionAdapter.completeLogin();
@@ -356,12 +370,12 @@ const cancellationAdapter = new CodexAppServerAdapter({
     command: process.execPath,
     args: [fixture],
     env: { ...options.env, TUNACAD_MOCK_LOGIN_REQUIRED: '1', TUNACAD_MOCK_LOGIN_DELAY_MS: '1000' },
-    requestTimeoutMs: 2_000,
+    requestTimeoutMs: FIXTURE_TIMEOUT_MS,
   }),
 });
 try {
   const connected = await cancellationAdapter.connect();
-  assert.equal(connected.account.requiresOpenaiAuth, true);
+  assert.equal(connected.account.requiresAuthentication, true);
   const pendingLogin = await cancellationAdapter.startDeviceCodeLogin();
   await cancellationAdapter.cancelDeviceCodeLogin(pendingLogin.loginId);
   await assert.rejects(pendingLogin.completion, /did not complete successfully/);
@@ -372,17 +386,17 @@ try {
 
 console.log('[agent-bridge] Companion supervision, login, MCP config, streaming, agent approvals, idempotent CAD outcome continuation, heartbeat, and replay defense passed.');
 
-async function waitForSent(relaySocket, predicate, timeoutMs = 2_000) {
+async function waitForSent(relaySocket, predicate, timeoutMs = FIXTURE_TIMEOUT_MS) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const found = relaySocket.messages().find(predicate);
     if (found) return found;
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
-  throw new Error('Timed out waiting for companion relay output.');
+  throw new Error(`Timed out waiting for companion relay output: ${JSON.stringify(relaySocket.messages())}`);
 }
 
-async function waitForMessageCount(relaySocket, type, expected, timeoutMs = 2_000) {
+async function waitForMessageCount(relaySocket, type, expected, timeoutMs = FIXTURE_TIMEOUT_MS) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (relaySocket.messages().filter((message) => message.type === type).length >= expected) return;
@@ -391,7 +405,7 @@ async function waitForMessageCount(relaySocket, type, expected, timeoutMs = 2_00
   throw new Error(`Timed out waiting for ${expected} ${type} messages.`);
 }
 
-async function waitForCondition(predicate, timeoutMs = 2_000) {
+async function waitForCondition(predicate, timeoutMs = FIXTURE_TIMEOUT_MS) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     if (predicate()) return;

@@ -4,6 +4,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { RelayConnectionSupervisor } from '../agent-bridge/src/relay-connection-supervisor.mjs';
+import {
+  createAgentAdapterCapabilities,
+  createAgentConnection,
+  createAgentThread,
+  createAgentTurn,
+} from '../agent-bridge/src/agent-adapter-contract.mjs';
 import { FileCursorStore } from '../agent-bridge/src/cursor-store.mjs';
 import { isRelaySocketStale, nextRelayHeartbeatAlarm } from '../src/aiAgent/relayHeartbeat.mjs';
 import { createRelayControlMessage, parseRelayControlMessage } from '../src/aiAgent/relayControl.mjs';
@@ -53,16 +59,19 @@ class FakeAdapter extends EventEmitter {
     super();
     this.onStart = onStart;
     this.onClose = onClose;
+    this.capabilities = createAgentAdapterCapabilities();
   }
 
   async connect() {
     this.onStart();
-    return {
-      version: '0.147.0',
-      initialized: { userAgent: 'fake-codex/0.147.0' },
-      account: { authMode: 'chatgpt', planType: 'test', requiresOpenaiAuth: false },
-    };
+    return createAgentConnection({
+      agent: { id: 'resilience-fixture', name: 'Resilience Fixture', version: '1.0.0' },
+      account: { authMode: 'agentIdentity', planType: 'test', requiresAuthentication: false },
+    });
   }
+
+  async startThread() { return createAgentThread({ threadId: 'thread:resilience' }); }
+  async startTurn(threadId) { return createAgentTurn({ threadId, turnId: 'turn:resilience' }); }
 
   async close() {
     this.onClose();

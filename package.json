@@ -1,10 +1,12 @@
 {
   "name": "tunacad-agent-bridge-source",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "npm run test:runtime && npm run test:resilience && npm run test:package && npm run test:distribution",
+    "test": "npm run test:adapter-contract && npm run test:gemini-runtime && npm run test:runtime && npm run test:resilience && npm run test:package && npm run test:distribution",
+    "test:adapter-contract": "node scripts/test-agent-adapter-contract.mjs",
+    "test:gemini-runtime": "node scripts/test-gemini-cli-adapter.mjs",
     "test:runtime": "node scripts/test-agent-bridge-codex-runtime.mjs",
     "test:resilience": "node scripts/test-agent-bridge-resilience.mjs",
     "test:package": "node scripts/test-agent-bridge-package-artifact.mjs",

@@ -1,6 +1,12 @@
 import { EventEmitter, once } from 'node:events';
 import { performance } from 'node:perf_hooks';
 import { AgentBridgeRuntime } from '../agent-bridge/src/agent-bridge-runtime.mjs';
+import {
+  createAgentAdapterCapabilities,
+  createAgentConnection,
+  createAgentThread,
+  createAgentTurn,
+} from '../agent-bridge/src/agent-adapter-contract.mjs';
 import { RelayConnectionSupervisor } from '../agent-bridge/src/relay-connection-supervisor.mjs';
 import { createAgentBridgeEnvelope } from '../src/aiAgent/bridgeProtocol.mjs';
 
@@ -199,16 +205,19 @@ class BenchmarkAdapter extends EventEmitter {
     super();
     this.onStart = onStart;
     this.onStop = onStop;
+    this.capabilities = createAgentAdapterCapabilities();
   }
 
   async connect() {
     this.onStart();
-    return {
-      version: '0.147.0',
-      initialized: { userAgent: 'benchmark-codex/0.147.0' },
-      account: { authMode: 'chatgpt', planType: 'benchmark', requiresOpenaiAuth: false },
-    };
+    return createAgentConnection({
+      agent: { id: 'relay-benchmark', name: 'Relay Benchmark', version: '1.0.0' },
+      account: { authMode: 'agentIdentity', planType: 'benchmark', requiresAuthentication: false },
+    });
   }
+
+  async startThread() { return createAgentThread({ threadId: 'thread:benchmark' }); }
+  async startTurn(threadId) { return createAgentTurn({ threadId, turnId: 'turn:benchmark' }); }
 
   async close() { this.onStop(); }
 }

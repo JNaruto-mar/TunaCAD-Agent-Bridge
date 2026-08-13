@@ -6,10 +6,11 @@ import {
 } from '../src/relay-client.mjs';
 import { RelayConnectionSupervisor } from '../src/relay-connection-supervisor.mjs';
 import { AGENT_BRIDGE_TIMING_POLICY } from '../../src/aiAgent/bridgeCompatibility.mjs';
+import { parseAgentProvider } from '../src/agent-adapter-registry.mjs';
 
 const args = parseArguments(process.argv.slice(2));
 if (args.command !== 'connect' || !args.origin || !args.session) {
-  fail('Usage: tunacad-agent-bridge connect --origin https://tunacad.com --session <session-id>');
+  fail('Usage: tunacad-agent-bridge connect --origin https://tunacad.com --session <session-id> [--agent codex|gemini]');
 }
 if (!stdin.isTTY) fail('Pairing requires an interactive terminal so the one-time code is not placed in shell history.');
 
@@ -23,7 +24,7 @@ try {
 }
 
 let heartbeatTimer;
-const supervisor = new RelayConnectionSupervisor({ pairing });
+const supervisor = new RelayConnectionSupervisor({ pairing, agentProvider: args.agent });
 supervisor.on('reconnecting', ({ attempt, delayMs }) => {
   stdout.write(`TunaCAD relay reconnect ${attempt}/${AGENT_BRIDGE_TIMING_POLICY.reconnectDelaysMs.length} in ${delayMs} ms.\n`);
 });
@@ -40,17 +41,20 @@ try {
   heartbeatTimer.unref();
   if (result.status === 'authentication_required') {
     if (result.login) {
-      stdout.write(`Codex sign-in: ${result.login.verificationUrl}\n`);
+      stdout.write(`${result.agent.name} sign-in: ${result.login.verificationUrl}\n`);
       stdout.write(`Enter device code: ${result.login.userCode}\n`);
       result.login.completion.then(
-        ({ account }) => stdout.write(`Codex sign-in completed${account.planType ? ` (${account.planType})` : ''}. TunaCAD is ready.\n`),
+        ({ account }) => stdout.write(`${result.agent.name} sign-in completed${account.planType ? ` (${account.planType})` : ''}. TunaCAD is ready.\n`),
         (error) => reportFatal(error instanceof Error ? error.message : String(error)),
       );
     } else {
-      stdout.write('Codex login could not be started. Run `codex login`, then reconnect TunaCAD.\n');
+      const remediation = args.agent === 'gemini'
+        ? 'Set GEMINI_API_KEY in this terminal, then reconnect TunaCAD.'
+        : 'Authenticate the agent, then reconnect TunaCAD.';
+      stdout.write(`${result.agent.name} authentication could not be started. ${remediation}\n`);
     }
   } else {
-    stdout.write(`TunaCAD Agent Bridge ready with Codex ${result.version}. Keep this terminal open.\n`);
+    stdout.write(`TunaCAD Agent Bridge ready with ${result.agent.name} ${result.agent.version}. Keep this terminal open.\n`);
   }
 } catch (error) {
   reportFatal(error instanceof Error ? error.message : String(error));
@@ -63,11 +67,15 @@ process.once('SIGINT', () => {
 });
 
 function parseArguments(values) {
-  const parsed = { command: values[0] };
+  const parsed = { command: values[0], agent: 'codex' };
   for (let index = 1; index < values.length; index += 1) {
     const key = values[index];
     if (key === '--code') fail('Do not put a pairing code on the command line. Enter it at the interactive prompt.');
     if (key === '--origin' || key === '--session') parsed[key.slice(2)] = values[++index];
+    else if (key === '--agent') {
+      try { parsed.agent = parseAgentProvider(values[++index]); }
+      catch (error) { fail(error instanceof Error ? error.message : String(error)); }
+    }
     else fail(`Unknown argument: ${key}`);
   }
   return parsed;

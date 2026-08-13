@@ -7,7 +7,7 @@ import {
   parseRelayControlMessage,
 } from '../../src/aiAgent/relayControl.mjs';
 import { AgentBridgeRuntime } from './agent-bridge-runtime.mjs';
-import { CodexAppServerAdapter } from './codex-app-server-adapter.mjs';
+import { createAgentAdapter, parseAgentProvider } from './agent-adapter-registry.mjs';
 import { FileCursorStore } from './cursor-store.mjs';
 import { openRelaySocket } from './relay-client.mjs';
 
@@ -16,8 +16,9 @@ const TERMINAL_CLOSE_CODES = new Set([1000, 4001, 4002, 4400, 4403, 4409]);
 export class RelayConnectionSupervisor extends EventEmitter {
   constructor({
     pairing,
+    agentProvider = 'codex',
     socketFactory = (credentials) => openRelaySocket(credentials),
-    adapterFactory = (credentials) => new CodexAppServerAdapter({ pairing: credentials }),
+    adapterFactory = (credentials) => createAgentAdapter({ provider: agentProvider, pairing: credentials }),
     runtimeFactory = (options) => new AgentBridgeRuntime(options),
     cursorStore = new FileCursorStore(),
     reconnectDelaysMs = AGENT_BRIDGE_TIMING_POLICY.reconnectDelaysMs,
@@ -30,6 +31,7 @@ export class RelayConnectionSupervisor extends EventEmitter {
   }) {
     super();
     this.pairing = pairing;
+    this.agentProvider = parseAgentProvider(agentProvider);
     this.socketFactory = socketFactory;
     this.adapterFactory = adapterFactory;
     this.runtimeFactory = runtimeFactory;

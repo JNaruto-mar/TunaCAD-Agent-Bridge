@@ -12,8 +12,11 @@ if (path.dirname(outputRoot) !== packageRoot || path.basename(outputRoot) !== 'd
 
 const sources = [
   'agent-bridge/bin/tunacad-agent-bridge.mjs',
+  'agent-bridge/src/agent-adapter-contract.mjs',
+  'agent-bridge/src/agent-adapter-registry.mjs',
   'agent-bridge/src/agent-bridge-runtime.mjs',
   'agent-bridge/src/codex-app-server-adapter.mjs',
+  'agent-bridge/src/gemini-cli-adapter.mjs',
   'agent-bridge/src/cursor-store.mjs',
   'agent-bridge/src/relay-client.mjs',
   'agent-bridge/src/relay-connection-supervisor.mjs',

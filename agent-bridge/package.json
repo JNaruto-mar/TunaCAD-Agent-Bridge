@@ -1,7 +1,7 @@
 {
   "name": "@tunacad/agent-bridge",
-  "version": "0.2.8",
-  "description": "Local authenticated bridge between TunaCAD browser workspaces and Codex App Server.",
+  "version": "0.2.9",
+  "description": "Local authenticated bridge between TunaCAD browser workspaces and supported AI agents.",
   "license": "UNLICENSED",
   "type": "module",
   "bin": {
@@ -37,6 +37,7 @@
     "tunacad",
     "cad",
     "codex",
+    "gemini",
     "mcp"
   ],
   "publishConfig": {

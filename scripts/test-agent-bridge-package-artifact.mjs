@@ -6,8 +6,6 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { parseNpmPackMetadata } from './lib/agent-bridge-distribution.mjs';
-
 const repositoryRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const packageRoot = path.resolve(repositoryRoot, 'agent-bridge');
 const assemblyPath = path.resolve(packageRoot, 'dist/ASSEMBLY.json');
@@ -68,7 +66,7 @@ try {
   assert.equal(assembly.packageName, '@tunacad/agent-bridge');
   assert.equal(assembly.packageVersion, packageJson.version);
   assert.equal(assembly.protocol, 'tunacad.agent-bridge/1');
-  assert.equal(assembly.files.length, 13);
+  assert.equal(assembly.files.length, 16);
   assert.equal(new Set(assembly.files.map((file) => file.path)).size, assembly.files.length);
   assert.deepEqual(shrinkwrap.packages[''].dependencies, packageJson.dependencies);
   assert.equal(shrinkwrap.packages[''].version, packageJson.version);
@@ -109,7 +107,7 @@ try {
     cwd: packageRoot,
   });
   requireSuccess(packed, 'npm pack');
-  const metadata = parseNpmPackMetadata(packed.stdout);
+  const [metadata] = JSON.parse(packed.stdout);
   assert.equal(metadata.name, '@tunacad/agent-bridge');
   assert.match(metadata.integrity, /^sha512-/);
   assert.ok(metadata.size < 250_000, `Companion tarball unexpectedly large: ${metadata.size} bytes.`);

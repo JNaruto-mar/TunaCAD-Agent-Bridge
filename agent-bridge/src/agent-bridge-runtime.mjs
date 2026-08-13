@@ -1,4 +1,14 @@
 import { createAgentBridgeEnvelope, parseAgentBridgeMessage } from '../../src/aiAgent/bridgeProtocol.mjs';
+import {
+  assertAgentAdapter,
+  assertAgentAdapterEvent,
+  assertAgentAuthenticationChallenge,
+  assertAgentConnection,
+  assertAgentThread,
+  assertAgentTurn,
+  requireAgentAdapterCapability,
+  toBridgeAccountState,
+} from './agent-adapter-contract.mjs';
 
 const MAX_REPLAY_MESSAGES = 2_048;
 const MAX_REPLAY_BYTES = 8 * 1024 * 1024;
@@ -15,6 +25,7 @@ export class AgentBridgeRuntime {
     uuid = () => crypto.randomUUID(),
   }) {
     if (!pairing?.sessionId || !socket || !adapter) throw new Error('Pairing, relay socket, and agent adapter are required.');
+    this.adapterContract = assertAgentAdapter(adapter);
     this.pairing = pairing;
     this.socket = socket;
     this.adapter = adapter;
@@ -34,7 +45,7 @@ export class AgentBridgeRuntime {
     this.onCursorChange = onCursorChange;
     this.lastHeartbeatAt = null;
     this.account = null;
-    this.agentVersion = null;
+    this.agent = null;
     this.activeThreadId = null;
     this.activeTurnId = null;
     this.replayOnNextResume = false;
@@ -50,7 +61,10 @@ export class AgentBridgeRuntime {
     };
     this.boundAdapterEvent = (descriptor) => this.#handleAdapterEvent(descriptor);
     this.boundAdapterError = (error) => this.#sendFailure(error);
-    this.boundAdapterExit = () => this.#sendFailure(new Error('Codex App Server exited unexpectedly.'), false);
+    this.boundAdapterExit = () => this.#sendFailure(
+      new Error(`${this.agent?.name ?? 'Agent runtime'} exited unexpectedly.`),
+      false,
+    );
   }
 
   async start() {
@@ -61,30 +75,31 @@ export class AgentBridgeRuntime {
     this.adapter.on('error', this.boundAdapterError);
     this.adapter.on('exit', this.boundAdapterExit);
     try {
-      const connected = await this.adapter.connect();
+      const connected = assertAgentConnection(await this.adapter.connect());
       this.account = connected.account;
-      this.agentVersion = connected.version;
-      this.#sendDescriptor({ type: 'account.updated', payload: connected.account });
-      if (connected.account.requiresOpenaiAuth) {
+      this.agent = connected.agent;
+      this.#sendDescriptor({ type: 'account.updated', payload: toBridgeAccountState(connected.account) });
+      if (connected.account.requiresAuthentication) {
         let login;
         try {
-          login = await this.adapter.startDeviceCodeLogin();
+          this.#requireCapability('interactiveAuthentication');
+          login = assertAgentAuthenticationChallenge(await this.adapter.beginAuthentication());
         } catch (error) {
-          this.#sendFailure(error, false, 'CODEX_LOGIN_START_FAILED');
+          this.#sendFailure(error, false, 'AGENT_AUTHENTICATION_START_FAILED');
           return { status: 'authentication_required', login: null, ...connected };
         }
         this.#sendFailure(
           new Error(`Open ${login.verificationUrl} and enter code ${login.userCode}.`),
           true,
-          'CODEX_LOGIN_REQUIRED',
+          'AGENT_AUTHENTICATION_REQUIRED',
         );
-        login.completion.catch((error) => this.#sendFailure(error, true, 'CODEX_LOGIN_FAILED'));
+        login.completion.catch((error) => this.#sendFailure(error, true, 'AGENT_AUTHENTICATION_FAILED'));
         return { status: 'authentication_required', login, ...connected };
       }
       this.#sendReady();
       return { status: 'ready', ...connected };
     } catch (error) {
-      this.#sendFailure(error, false, 'CODEX_START_FAILED');
+      this.#sendFailure(error, false, 'AGENT_START_FAILED');
       throw error;
     }
   }
@@ -119,37 +134,45 @@ export class AgentBridgeRuntime {
         this.lastHeartbeatAt = this.now().getTime();
         return;
       case 'thread.start': {
-        const result = await this.adapter.startThread(message.payload);
-        this.activeThreadId = result?.thread?.id ?? this.activeThreadId;
+        const result = assertAgentThread(await this.adapter.startThread(message.payload));
+        this.activeThreadId = result.threadId;
         return;
       }
       case 'thread.resume':
-        await this.adapter.resumeThread(message.payload.threadId);
-        this.activeThreadId = message.payload.threadId;
+        this.#requireCapability('threadResume');
+        this.activeThreadId = assertAgentThread(
+          await this.adapter.resumeThread(message.payload.threadId),
+        ).threadId;
         return;
       case 'chat.user_message': {
         let threadId = message.payload.threadId;
         if (!threadId) {
-          const thread = await this.adapter.startThread();
-          threadId = thread?.thread?.id;
+          const thread = assertAgentThread(await this.adapter.startThread());
+          threadId = thread.threadId;
         }
-        if (!threadId) throw new Error('Codex did not provide a thread ID.');
+        if (!threadId) throw new Error('The connected agent did not provide a thread ID.');
         this.activeThreadId = threadId;
-        const turn = await this.adapter.startTurn(threadId, message.payload.content);
-        this.activeTurnId = turn?.turn?.id ?? this.activeTurnId;
+        const turn = assertAgentTurn(await this.adapter.startTurn(threadId, message.payload.content));
+        this.activeTurnId = turn.turnId;
         return;
       }
       case 'chat.steer':
+        this.#requireCapability('turnSteering');
         await this.adapter.steerTurn(message.payload.threadId, message.payload.turnId, message.payload.content);
         return;
       case 'run.cancel':
+        this.#requireCapability('turnCancellation');
         await this.adapter.cancelTurn(message.payload.threadId, message.payload.turnId);
         return;
       case 'approval.decision':
         if (message.payload.domain === 'cad') await this.#respondToCadApproval(message.payload);
-        else await this.adapter.respondToApproval(message.payload.approvalId, message.payload.decision);
+        else {
+          this.#requireCapability('approvalResponses');
+          await this.adapter.respondToApproval(message.payload.approvalId, message.payload.decision);
+        }
         return;
       case 'user_input.response':
+        this.#requireCapability('userInputResponses');
         await this.adapter.respondToUserInput(message.payload.inputRequestId, message.payload.answers);
         return;
       default:
@@ -189,10 +212,11 @@ export class AgentBridgeRuntime {
 
   #handleAdapterEvent(descriptor) {
     try {
+      descriptor = assertAgentAdapterEvent(descriptor);
       if (descriptor.type === 'account.updated') {
         this.account = descriptor.payload;
-        this.#sendDescriptor(descriptor);
-        if (this.account.requiresOpenaiAuth) this.#beginLoginRecovery();
+        this.#sendDescriptor({ type: descriptor.type, payload: toBridgeAccountState(descriptor.payload) });
+        if (this.account.requiresAuthentication) this.#beginLoginRecovery();
         else this.#sendReady();
         return;
       }
@@ -212,15 +236,16 @@ export class AgentBridgeRuntime {
     if (this.closed || this.loginRecovery) return;
     const recovery = (async () => {
       try {
-        const login = await this.adapter.startDeviceCodeLogin();
+        this.#requireCapability('interactiveAuthentication');
+        const login = assertAgentAuthenticationChallenge(await this.adapter.beginAuthentication());
         this.#sendFailure(
-          new Error(`Codex sign-in expired. Open ${login.verificationUrl} and enter code ${login.userCode}.`),
+          new Error(`${this.agent?.name ?? 'Agent'} sign-in expired. Open ${login.verificationUrl} and enter code ${login.userCode}.`),
           true,
-          'CODEX_LOGIN_REQUIRED',
+          'AGENT_AUTHENTICATION_REQUIRED',
         );
         await login.completion;
       } catch (error) {
-        this.#sendFailure(error, true, 'CODEX_LOGIN_FAILED');
+        this.#sendFailure(error, true, 'AGENT_AUTHENTICATION_FAILED');
       }
     })();
     this.loginRecovery = recovery;
@@ -233,7 +258,8 @@ export class AgentBridgeRuntime {
     const prefix = 'cadapproval:';
     if (!approvalId.startsWith(prefix)) throw new Error('Invalid TunaCAD CAD approval correlation ID.');
     if (!['accept', 'decline', 'cancel'].includes(decision)) throw new Error('CAD proposals support accept, decline, or cancel only.');
-    if (!this.activeThreadId) throw new Error('A CAD approval outcome requires an active Codex thread.');
+    if (!this.activeThreadId) throw new Error('A CAD approval outcome requires an active agent thread.');
+    this.#requireCapability('cadOutcomeReporting');
     const proposalId = approvalId.slice(prefix.length);
     const prior = this.cadApprovalDecisions.get(approvalId);
     if (prior && prior !== decision) throw new Error('A CAD approval outcome cannot be changed after it is reported.');
@@ -261,17 +287,21 @@ export class AgentBridgeRuntime {
   }
 
   #sendReady() {
-    if (!this.agentVersion || this.account?.requiresOpenaiAuth) return;
+    if (!this.agent || this.account?.requiresAuthentication) return;
     const envelope = this.#sendDescriptor({
       type: 'bridge.ready',
       payload: {
-        bridge: { name: 'tunacad-agent-bridge', version: '0.2.8', platform: process.platform },
-        agent: { name: 'Codex App Server', version: this.agentVersion },
+        bridge: { name: 'tunacad-agent-bridge', version: '0.2.9', platform: process.platform },
+        agent: { name: this.agent.name, version: this.agent.version },
         supportedProtocols: ['tunacad.agent-bridge/1'],
         lastAcceptedSequence: this.lastBrowserSequence,
       },
     });
     this.lastReadySequence = envelope.sequence;
+  }
+
+  #requireCapability(capability) {
+    return requireAgentAdapterCapability(this.adapter, capability);
   }
 
   #sendFailure(error, retryable = true, code = 'AGENT_BRIDGE_ERROR') {
