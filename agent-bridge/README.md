@@ -14,7 +14,7 @@ The TunaCAD Agent Bridge connects a TunaCAD browser workspace to a locally insta
 Copy the exact command shown by TunaCAD. It has this form:
 
 ```sh
-npx --yes @tunacad/agent-bridge@0.2.7 connect --origin https://tunacad.com --session <session-id>
+npx --yes @tunacad/agent-bridge@0.2.8 connect --origin https://tunacad.com --session <session-id>
 ```
 
 Enter the one-time code only at the interactive prompt. Do not place the code in command history. If Codex authentication is required, the bridge displays the official OpenAI device-code URL and code.
@@ -28,14 +28,14 @@ TunaCAD pins the complete package version in every pairing command. Do not repla
 To verify a registry installation, use a temporary project with a current npm CLI:
 
 ```sh
-npm install --save-exact @tunacad/agent-bridge@0.2.7
+npm install --save-exact @tunacad/agent-bridge@0.2.8
 npm audit signatures
 ```
 
 For a downloaded GitHub release, first verify both subjects against the TunaCAD Agent Bridge repository, then compare the tarball with the manifest:
 
 ```sh
-gh attestation verify tunacad-agent-bridge-0.2.7.tgz --repo JNaruto-mar/TunaCAD-Agent-Bridge
+gh attestation verify tunacad-agent-bridge-0.2.8.tgz --repo JNaruto-mar/TunaCAD-Agent-Bridge
 gh attestation verify agent-bridge-release-manifest.json --repo JNaruto-mar/TunaCAD-Agent-Bridge
 node scripts/verify-agent-bridge-release.mjs --manifest agent-bridge-release-manifest.json --assembly ASSEMBLY.json
 ```

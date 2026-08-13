@@ -23,7 +23,7 @@ try {
     'scripts/build-agent-bridge-release.mjs',
     '--output', outputRoot,
     '--source-commit', 'a'.repeat(40),
-    '--release-tag', 'agent-bridge-v0.2.7',
+    '--release-tag', 'agent-bridge-v0.2.8',
   ], {
     env: {
       ...process.env,
@@ -46,7 +46,7 @@ try {
   ]), 'Release digest verifier CLI');
   assert.equal(manifest.source.repository, AGENT_BRIDGE_RELEASE_REPOSITORY);
   assert.equal(manifest.source.workflow, AGENT_BRIDGE_RELEASE_WORKFLOW);
-  assert.equal(manifest.package.exactSpecifier, '@tunacad/agent-bridge@0.2.7');
+  assert.equal(manifest.package.exactSpecifier, '@tunacad/agent-bridge@0.2.8');
 
   const tampered = Buffer.from(tarballBytes);
   tampered[Math.floor(tampered.length / 2)] ^= 1;
@@ -58,7 +58,7 @@ try {
     ...manifest,
     trustPolicy: { ...manifest.trustPolicy, npmSigstoreProvenanceRequired: false },
   }), /trust policy/);
-  assert.throws(() => assertAgentBridgeReleaseTag('v0.2.7', '0.2.7'), /agent-bridge-v0.2.7/);
+  assert.throws(() => assertAgentBridgeReleaseTag('v0.2.8', '0.2.8'), /agent-bridge-v0.2.8/);
 
   await writeFile(path.resolve(temporaryRoot, 'preserved-codex-config.toml'), 'model = "unchanged"\n', 'utf8');
   await writeFile(path.resolve(temporaryRoot, 'preserved-cursor-state.json'), '{"schemaVersion":1,"sessions":{}}\n', 'utf8');
@@ -71,7 +71,7 @@ try {
     cwd: consumerRoot,
   }), 'Exact local release installation');
   const installedPackage = path.resolve(consumerRoot, 'node_modules/@tunacad/agent-bridge/package.json');
-  assert.equal(JSON.parse(await readFile(installedPackage, 'utf8')).version, '0.2.7');
+  assert.equal(JSON.parse(await readFile(installedPackage, 'utf8')).version, '0.2.8');
   requireSuccess(runNpm(['uninstall', '--no-audit', '--no-fund', '@tunacad/agent-bridge'], {
     cwd: consumerRoot,
   }), 'Local release uninstall');
