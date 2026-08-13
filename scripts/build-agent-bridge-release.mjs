@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import {
   assertAgentBridgeReleaseTag,
   createAgentBridgeReleaseManifest,
+  parseNpmPackMetadata,
 } from './lib/agent-bridge-distribution.mjs';
 
 const repositoryRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -24,7 +25,7 @@ if ((await readdir(outputRoot)).length !== 0) {
 requireSuccess(run(process.execPath, ['agent-bridge/scripts/prepare-package.mjs']), 'Companion assembly');
 const packed = runNpm(['pack', '--json', '--ignore-scripts', '--pack-destination', outputRoot], { cwd: packageRoot });
 requireSuccess(packed, 'Companion release pack');
-const [metadata] = JSON.parse(packed.stdout);
+const metadata = parseNpmPackMetadata(packed.stdout);
 const tarballPath = path.resolve(outputRoot, metadata.filename);
 const assemblyPath = path.resolve(packageRoot, 'dist/ASSEMBLY.json');
 const tarballBytes = await readFile(tarballPath);

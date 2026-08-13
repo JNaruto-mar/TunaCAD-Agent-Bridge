@@ -10,6 +10,7 @@ import {
   AGENT_BRIDGE_RELEASE_WORKFLOW,
   assertAgentBridgeReleaseManifest,
   assertAgentBridgeReleaseTag,
+  parseNpmPackMetadata,
   verifyAgentBridgeReleaseFiles,
 } from './lib/agent-bridge-distribution.mjs';
 
@@ -59,6 +60,17 @@ try {
     trustPolicy: { ...manifest.trustPolicy, npmSigstoreProvenanceRequired: false },
   }), /trust policy/);
   assert.throws(() => assertAgentBridgeReleaseTag('v0.2.8', '0.2.8'), /agent-bridge-v0.2.8/);
+  const npmPackFixture = {
+    name: '@tunacad/agent-bridge',
+    version: '0.2.8',
+    filename: 'tunacad-agent-bridge-0.2.8.tgz',
+    integrity: 'sha512-fixture',
+    files: [],
+  };
+  assert.deepEqual(parseNpmPackMetadata(JSON.stringify([npmPackFixture])), npmPackFixture);
+  assert.deepEqual(parseNpmPackMetadata(JSON.stringify(npmPackFixture)), npmPackFixture);
+  assert.throws(() => parseNpmPackMetadata('[]'), /exactly one package/);
+  assert.throws(() => parseNpmPackMetadata('{}'), /invalid package metadata/);
 
   await writeFile(path.resolve(temporaryRoot, 'preserved-codex-config.toml'), 'model = "unchanged"\n', 'utf8');
   await writeFile(path.resolve(temporaryRoot, 'preserved-cursor-state.json'), '{"schemaVersion":1,"sessions":{}}\n', 'utf8');

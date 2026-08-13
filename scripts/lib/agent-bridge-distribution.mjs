@@ -3,6 +3,23 @@ import { createHash } from 'node:crypto';
 export const AGENT_BRIDGE_RELEASE_REPOSITORY = 'JNaruto-mar/TunaCAD-Agent-Bridge';
 export const AGENT_BRIDGE_RELEASE_WORKFLOW = '.github/workflows/publish.yml';
 
+export function parseNpmPackMetadata(serialized) {
+  const parsed = JSON.parse(serialized);
+  if (Array.isArray(parsed) && parsed.length !== 1) {
+    throw new Error('npm pack must describe exactly one package.');
+  }
+  const metadata = Array.isArray(parsed) ? parsed[0] : parsed;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)
+    || typeof metadata.name !== 'string'
+    || typeof metadata.version !== 'string'
+    || typeof metadata.filename !== 'string'
+    || typeof metadata.integrity !== 'string'
+    || !Array.isArray(metadata.files)) {
+    throw new Error('npm pack returned invalid package metadata.');
+  }
+  return metadata;
+}
+
 export function createAgentBridgeReleaseManifest({
   packageName,
   packageVersion,
