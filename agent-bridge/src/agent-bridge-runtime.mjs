@@ -291,7 +291,7 @@ export class AgentBridgeRuntime {
     const envelope = this.#sendDescriptor({
       type: 'bridge.ready',
       payload: {
-        bridge: { name: 'tunacad-agent-bridge', version: '0.2.9', platform: process.platform },
+        bridge: { name: 'tunacad-agent-bridge', version: '0.2.10', platform: process.platform },
         agent: { name: this.agent.name, version: this.agent.version },
         supportedProtocols: ['tunacad.agent-bridge/1'],
         lastAcceptedSequence: this.lastBrowserSequence,

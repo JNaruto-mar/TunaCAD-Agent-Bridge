@@ -25,7 +25,7 @@ try {
     'scripts/build-agent-bridge-release.mjs',
     '--output', outputRoot,
     '--source-commit', sourceCommit,
-    '--release-tag', 'agent-bridge-v0.2.9',
+    '--release-tag', 'agent-bridge-v0.2.10',
   ], {
     env: {
       ...process.env,
@@ -49,7 +49,7 @@ try {
   ]), 'Release digest verifier CLI');
   assert.equal(manifest.source.repository, AGENT_BRIDGE_RELEASE_REPOSITORY);
   assert.equal(manifest.source.workflow, AGENT_BRIDGE_RELEASE_WORKFLOW);
-  assert.equal(manifest.package.exactSpecifier, '@tunacad/agent-bridge@0.2.9');
+  assert.equal(manifest.package.exactSpecifier, '@tunacad/agent-bridge@0.2.10');
   assert.equal(manifest.trustPolicy.npmSigstoreProvenanceRequired, true);
   assert.equal(manifest.trustPolicy.githubArtifactAttestationRequired, true);
   assert.deepEqual(manifest.manualAcceptance.physicalInstallUpdateUninstallPending, ['darwin', 'linux']);
@@ -64,7 +64,7 @@ try {
     ...manifest,
     trustPolicy: { ...manifest.trustPolicy, npmSigstoreProvenanceRequired: false },
   }), /trust policy/);
-  assert.throws(() => assertAgentBridgeReleaseTag('v0.2.9', '0.2.9'), /agent-bridge-v0.2.9/);
+  assert.throws(() => assertAgentBridgeReleaseTag('v0.2.10', '0.2.10'), /agent-bridge-v0.2.10/);
 
   await writeFile(path.resolve(temporaryRoot, 'preserved-codex-config.toml'), 'model = "unchanged"\n', 'utf8');
   await writeFile(path.resolve(temporaryRoot, 'preserved-cursor-state.json'), '{"schemaVersion":1,"sessions":{}}\n', 'utf8');
@@ -77,7 +77,7 @@ try {
     cwd: consumerRoot,
   }), 'Exact local release installation');
   const installedPackage = path.resolve(consumerRoot, 'node_modules/@tunacad/agent-bridge/package.json');
-  assert.equal(JSON.parse(await readFile(installedPackage, 'utf8')).version, '0.2.9');
+  assert.equal(JSON.parse(await readFile(installedPackage, 'utf8')).version, '0.2.10');
   requireSuccess(runNpm(['uninstall', '--no-audit', '--no-fund', '@tunacad/agent-bridge'], {
     cwd: consumerRoot,
   }), 'Local release uninstall');
@@ -96,6 +96,11 @@ try {
   assert.match(workflow, /environment:\s*agent-bridge-production/);
   assert.match(workflow, /npm publish/);
   assert.match(workflow, /npm audit signatures/);
+  assert.match(workflow, /for attempt[\s\S]*npm install[\s\S]*npm audit signatures/);
+  assert.ok(
+    workflow.indexOf('Upload signed release subjects')
+      < workflow.indexOf('Verify published registry signatures and Sigstore provenance'),
+  );
   assert.doesNotMatch(workflow, /NPM_TOKEN|NODE_AUTH_TOKEN/);
 
   process.stdout.write('[agent-bridge] OIDC release, attestations, digest verification, exact update, and non-destructive uninstall fixtures passed.\n');

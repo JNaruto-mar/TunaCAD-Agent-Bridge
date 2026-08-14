@@ -15,7 +15,7 @@ The TunaCAD Agent Bridge connects a TunaCAD browser workspace to a supported loc
 Copy the exact command shown by TunaCAD. It has this form:
 
 ```sh
-npx --yes @tunacad/agent-bridge@0.2.9 connect --origin https://tunacad.com --session <session-id>
+npx --yes @tunacad/agent-bridge@0.2.10 connect --origin https://tunacad.com --session <session-id>
 ```
 
 Enter the one-time code only at the interactive prompt. Do not place the code in command history. If Codex authentication is required, the bridge displays the official OpenAI device-code URL and code.
@@ -26,7 +26,7 @@ Select **Gemini CLI** in TunaCAD before copying the command. Set the API key onl
 
 ```powershell
 $env:GEMINI_API_KEY = 'your-key'
-npx --yes @tunacad/agent-bridge@0.2.9 connect --origin https://tunacad.com --session <session-id> --agent gemini
+npx --yes @tunacad/agent-bridge@0.2.10 connect --origin https://tunacad.com --session <session-id> --agent gemini
 ```
 
 Do not append the API key to the command. The bridge passes it only to the Gemini child process. It creates a temporary system settings file whose MCP header references `TUNACAD_MCP_AGENT_TOKEN`; the raw short-lived bearer token is never written there. A supplemental admin policy denies every non-TunaCAD tool and allows only the `tunacad` MCP server. Gemini conversation state is isolated under `~/.tunacad/gemini-agent`, limited to 20 sessions and one day, so an exact session UUID can resume after a companion restart.
@@ -42,14 +42,14 @@ TunaCAD pins the complete package version in every pairing command. Do not repla
 To verify a registry installation, use a temporary project with a current npm CLI:
 
 ```sh
-npm install --save-exact @tunacad/agent-bridge@0.2.9
+npm install --save-exact @tunacad/agent-bridge@0.2.10
 npm audit signatures
 ```
 
 For a downloaded GitHub release, first verify both subjects against the TunaCAD repository, then compare the tarball with the manifest:
 
 ```sh
-gh attestation verify tunacad-agent-bridge-0.2.9.tgz --repo JNaruto-mar/TunaCAD-Agent-Bridge
+gh attestation verify tunacad-agent-bridge-0.2.10.tgz --repo JNaruto-mar/TunaCAD-Agent-Bridge
 gh attestation verify agent-bridge-release-manifest.json --repo JNaruto-mar/TunaCAD-Agent-Bridge
 node <TunaCAD-source-checkout>/scripts/verify-agent-bridge-release.mjs --manifest agent-bridge-release-manifest.json --assembly ASSEMBLY.json
 ```

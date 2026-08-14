@@ -132,6 +132,25 @@ try {
   assert.equal(terminal[0].payload.status, 'cancelled');
   assert.equal(errors.length, 0);
 
+  events.length = 0;
+  const approvalTurn = await adapter.startTurn(resumed.threadId, 'Wait for browser CAD approval.');
+  const launchCountBeforeApproval = launches.length;
+  const approvalOutcome = await adapter.reportCadApproval({
+    threadId: approvalTurn.threadId,
+    proposalId: 'cadprop_30000000-0000-4000-8000-000000000036',
+    decision: 'accept',
+  });
+  assert.equal(approvalOutcome.mode, 'active_turn');
+  assert.deepEqual(approvalOutcome.result, {
+    threadId: approvalTurn.threadId,
+    turnId: approvalTurn.turnId,
+  });
+  assert.equal(launches.length, launchCountBeforeApproval, 'Browser approval must not start a competing Gemini turn.');
+  await adapter.cancelTurn(approvalTurn.threadId, approvalTurn.turnId);
+  await waitFor(() => events.some((event) => event.type === 'turn.completed'));
+  assert.equal(events.filter((event) => event.type === 'turn.completed').length, 1);
+  assert.equal(errors.length, 0);
+
   await adapter.close();
   await assert.rejects(() => readFile(settingsPath, 'utf8'));
   console.log('[phase3.6] Gemini CLI 0.52.x streaming, resume, cancellation, MCP isolation, redaction, and registry fixtures passed.');

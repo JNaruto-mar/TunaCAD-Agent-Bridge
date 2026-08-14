@@ -122,9 +122,17 @@ export class GeminiCliAdapter extends EventEmitter {
   }
 
   async reportCadApproval({ threadId, proposalId, decision }) {
+    const prompt = createCadApprovalOutcomePrompt({ proposalId, decision });
+    const run = this.activeRun;
+    if (run && run.threadId === threadId && !run.completed) {
+      return {
+        mode: 'active_turn',
+        result: { threadId, turnId: run.turnId },
+      };
+    }
     return {
       mode: 'follow_up_turn',
-      result: await this.startTurn(threadId, createCadApprovalOutcomePrompt({ proposalId, decision })),
+      result: await this.startTurn(threadId, prompt),
     };
   }
 

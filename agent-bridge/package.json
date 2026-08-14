@@ -1,6 +1,6 @@
 {
   "name": "@tunacad/agent-bridge",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "description": "Local authenticated bridge between TunaCAD browser workspaces and supported AI agents.",
   "license": "UNLICENSED",
   "type": "module",
