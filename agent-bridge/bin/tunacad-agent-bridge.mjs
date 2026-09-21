@@ -10,7 +10,7 @@ import { parseAgentProvider } from '../src/agent-adapter-registry.mjs';
 
 const args = parseArguments(process.argv.slice(2));
 if (args.command !== 'connect' || !args.origin || !args.session) {
-  fail('Usage: tunacad-agent-bridge connect --origin https://tunacad.com --session <session-id> [--agent codex|gemini]');
+  fail('Usage: tunacad-agent-bridge connect --origin https://tunacad.com --session <session-id> [--agent codex|gemini|claude]');
 }
 if (!stdin.isTTY) fail('Pairing requires an interactive terminal so the one-time code is not placed in shell history.');
 
@@ -50,7 +50,9 @@ try {
     } else {
       const remediation = args.agent === 'gemini'
         ? 'Set GEMINI_API_KEY in this terminal, then reconnect TunaCAD.'
-        : 'Authenticate the agent, then reconnect TunaCAD.';
+        : args.agent === 'claude'
+          ? 'Run claude auth login or set ANTHROPIC_API_KEY, then reconnect TunaCAD.'
+          : 'Authenticate the agent, then reconnect TunaCAD.';
       stdout.write(`${result.agent.name} authentication could not be started. ${remediation}\n`);
     }
   } else {

@@ -25,7 +25,12 @@ export class CodexRequestTracker {
 
   register(request, receivedAtMs = this.now()) {
     if (!request || !Object.hasOwn(request, 'id') || !supportedRequestMethods.has(request.method)) {
-      throw new Error('Unsupported Codex server request.');
+      const method = typeof request?.method === 'string'
+        && /^[A-Za-z0-9_.:/-]{1,160}$/.test(request.method)
+        ? request.method
+        : 'missing-or-unsafe';
+      const idState = request && Object.hasOwn(request, 'id') ? 'present' : 'missing';
+      throw new Error(`Unsupported Codex server request method "${method}" (request id ${idState}).`);
     }
     const key = String(request.id);
     if (this.pending.has(key)) throw new Error(`Duplicate Codex server request ${key}.`);

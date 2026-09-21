@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url';
 import {
   assertAgentBridgeReleaseTag,
   createAgentBridgeReleaseManifest,
-  parseNpmPackMetadata,
 } from './lib/agent-bridge-distribution.mjs';
 
 const repositoryRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -25,12 +24,12 @@ if ((await readdir(outputRoot)).length !== 0) {
 requireSuccess(run(process.execPath, ['agent-bridge/scripts/prepare-package.mjs']), 'Companion assembly');
 const packed = runNpm(['pack', '--json', '--ignore-scripts', '--pack-destination', outputRoot], { cwd: packageRoot });
 requireSuccess(packed, 'Companion release pack');
-const metadata = parseNpmPackMetadata(packed.stdout);
+const [metadata] = JSON.parse(packed.stdout);
 const tarballPath = path.resolve(outputRoot, metadata.filename);
 const assemblyPath = path.resolve(packageRoot, 'dist/ASSEMBLY.json');
 const tarballBytes = await readFile(tarballPath);
 const assemblyBytes = await readFile(assemblyPath);
-if (metadata.integrity !== `sha512-${createHash('sha512').update(tarballBytes).digest('base64')}`) {
+if (metadata.integrity !== `sha512-${digestBase64('sha512', tarballBytes)}`) {
   throw new Error('npm pack integrity does not match the release tarball.');
 }
 
@@ -42,11 +41,8 @@ const manifest = createAgentBridgeReleaseManifest({
   assemblyBytes,
   sourceCommit: options.sourceCommit,
 });
-await writeFile(
-  path.resolve(outputRoot, 'agent-bridge-release-manifest.json'),
-  `${JSON.stringify(manifest, null, 2)}\n`,
-  'utf8',
-);
+const manifestPath = path.resolve(outputRoot, 'agent-bridge-release-manifest.json');
+await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
 await copyFile(assemblyPath, path.resolve(outputRoot, 'ASSEMBLY.json'));
 process.stdout.write(`[agent-bridge] Release candidate built: ${metadata.filename} (${tarballBytes.byteLength} bytes).\n`);
 
@@ -56,9 +52,10 @@ function parseOptions(args) {
     const index = args.indexOf(`--${name}`);
     return direct?.slice(name.length + 3) ?? (index >= 0 ? args[index + 1] : fallback);
   };
+  const sourceCommit = read('source-commit', process.env.GITHUB_SHA ?? resolveGitCommit());
   return {
     output: read('output', 'artifacts/agent-bridge-release'),
-    sourceCommit: read('source-commit', process.env.GITHUB_SHA ?? resolveGitCommit()),
+    sourceCommit,
     releaseTag: read('release-tag'),
   };
 }
@@ -91,4 +88,8 @@ function requireSuccess(result, description) {
   if (result.status !== 0) {
     throw new Error(`${description} failed.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
   }
+}
+
+function digestBase64(algorithm, bytes) {
+  return createHash(algorithm).update(bytes).digest('base64');
 }

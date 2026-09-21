@@ -3,12 +3,14 @@ import { EventEmitter } from 'node:events';
 import readline from 'node:readline';
 import {
   AGENT_BRIDGE_TIMING_POLICY,
-  CODEX_APP_SERVER_MAX_EXCLUSIVE_VERSION,
   CODEX_APP_SERVER_MIN_VERSION,
+  CODEX_APP_SERVER_TESTED_MAX_VERSION,
+  CODEX_APP_SERVER_TESTED_MIN_VERSION,
 } from '../../src/aiAgent/bridgeCompatibility.mjs';
 
 export const MINIMUM_CODEX_APP_SERVER_VERSION = CODEX_APP_SERVER_MIN_VERSION;
-export const MAXIMUM_EXCLUSIVE_CODEX_APP_SERVER_VERSION = CODEX_APP_SERVER_MAX_EXCLUSIVE_VERSION;
+export const TESTED_MINIMUM_CODEX_APP_SERVER_VERSION = CODEX_APP_SERVER_TESTED_MIN_VERSION;
+export const TESTED_MAXIMUM_CODEX_APP_SERVER_VERSION = CODEX_APP_SERVER_TESTED_MAX_VERSION;
 const DEFAULT_REQUEST_TIMEOUT_MS = AGENT_BRIDGE_TIMING_POLICY.requestTimeoutMs;
 const MAX_STDERR_CHARS = 32_000;
 
@@ -65,16 +67,23 @@ export function compareVersions(left, right) {
 export function assertSupportedCodexVersion(version) {
   if (compareVersions(version, MINIMUM_CODEX_APP_SERVER_VERSION) < 0) {
     throw new Error(
-      `Codex ${version} is incompatible. TunaCAD requires ${MINIMUM_CODEX_APP_SERVER_VERSION} or newer.`,
-    );
-  }
-  if (compareVersions(version, MAXIMUM_EXCLUSIVE_CODEX_APP_SERVER_VERSION) >= 0) {
-    throw new Error(
-      `Codex ${version} has not been certified. TunaCAD currently supports versions before `
-      + `${MAXIMUM_EXCLUSIVE_CODEX_APP_SERVER_VERSION}.`,
+      `Codex ${version} is too old. Update Codex CLI to ${MINIMUM_CODEX_APP_SERVER_VERSION} or newer.`,
     );
   }
   return version;
+}
+
+export function classifyCodexVersion(version) {
+  assertSupportedCodexVersion(version);
+  return Object.freeze({
+    version,
+    minimumVersion: MINIMUM_CODEX_APP_SERVER_VERSION,
+    testedMinimumVersion: TESTED_MINIMUM_CODEX_APP_SERVER_VERSION,
+    testedMaximumVersion: TESTED_MAXIMUM_CODEX_APP_SERVER_VERSION,
+    withinTestedRange: compareVersions(version, TESTED_MINIMUM_CODEX_APP_SERVER_VERSION) >= 0
+      && compareVersions(version, TESTED_MAXIMUM_CODEX_APP_SERVER_VERSION) <= 0,
+    newerThanTestedRange: compareVersions(version, TESTED_MAXIMUM_CODEX_APP_SERVER_VERSION) > 0,
+  });
 }
 
 export class CodexAppServerClient extends EventEmitter {
@@ -164,6 +173,16 @@ export class CodexAppServerClient extends EventEmitter {
     this.#write({ id, result });
   }
 
+  respondError(id, { code = -32601, message = 'Method not found.', data } = {}) {
+    if (!Number.isInteger(code) || typeof message !== 'string' || !message) {
+      throw new Error('A valid JSON-RPC error code and message are required.');
+    }
+    this.#write({
+      id,
+      error: { code, message, ...(data === undefined ? {} : { data }) },
+    });
+  }
+
   waitForNotification(predicate, timeoutMs = this.requestTimeoutMs) {
     const existingIndex = this.notifications.findIndex(predicate);
     if (existingIndex >= 0) return Promise.resolve(this.notifications.splice(existingIndex, 1)[0]);
@@ -249,6 +268,10 @@ export class CodexAppServerClient extends EventEmitter {
       message = JSON.parse(line);
     } catch {
       this.emit('protocolError', new Error('Codex App Server emitted invalid JSONL.'));
+      return;
+    }
+    if (!message || typeof message !== 'object' || Array.isArray(message)) {
+      this.emit('protocolError', new Error('Codex App Server emitted a non-object JSON-RPC message.'));
       return;
     }
     if (Object.hasOwn(message, 'id') && !Object.hasOwn(message, 'method')) {

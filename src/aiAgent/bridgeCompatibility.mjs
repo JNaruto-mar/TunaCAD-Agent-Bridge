@@ -1,8 +1,23 @@
 import { AGENT_BRIDGE_PROTOCOL } from './bridgeProtocol.mjs';
 
-export const CODEX_APP_SERVER_MIN_VERSION = '0.146.0';
-export const CODEX_APP_SERVER_MAX_EXCLUSIVE_VERSION = '0.148.0';
-export const CODEX_APP_SERVER_TESTED_VERSIONS = Object.freeze(['0.146.0', '0.147.0']);
+export const CODEX_APP_SERVER_MIN_VERSION = '0.150.0';
+export const CODEX_APP_SERVER_TESTED_MIN_VERSION = '0.150.0';
+export const CODEX_APP_SERVER_TESTED_MAX_VERSION = '0.155.1';
+export const CODEX_APP_SERVER_TESTED_VERSIONS = Object.freeze([
+  '0.150.0',
+  '0.150.1',
+  '0.151.0',
+  '0.152.0',
+  '0.152.1',
+  '0.153.0',
+  '0.153.1',
+  '0.153.2',
+  '0.153.3',
+  '0.153.4',
+  '0.154.0',
+  '0.155.0',
+  '0.155.1',
+]);
 
 export const AGENT_BRIDGE_TIMING_POLICY = Object.freeze({
   requestTimeoutMs: 20_000,
@@ -27,10 +42,29 @@ export const AGENT_BRIDGE_TIMING_POLICY = Object.freeze({
 
 export const TUNACAD_REQUIRED_MCP_TOOLS = Object.freeze([
   'cad_get_capabilities',
+  'cad_get_simulation_capabilities',
   'cad_get_project_state',
   'cad_get_assembly_state',
+  'cad_get_model_tree',
+  'cad_get_part_state',
+  'cad_get_part_principal_references',
+  'cad_get_feature',
+  'cad_get_component',
+  'cad_list_materials',
+  'cad_get_appearance_material',
+  'cad_create_semantic_reference',
+  'cad_get_semantic_references',
+  'cad_rebind_semantic_reference',
+  'cad_delete_semantic_reference',
   'cad_get_observability',
+  'cad_prepare_simulation',
+  'cad_run_simulation',
+  'cad_get_simulation_status',
+  'cad_cancel_simulation',
+  'cad_get_simulation_results',
+  'cad_run_simulation_convergence',
   'cad_search_tools',
+  'cad_describe_operation',
   'cad_validate_plan',
   'cad_stage_plan',
   'cad_get_staged_plan',
@@ -38,6 +72,10 @@ export const TUNACAD_REQUIRED_MCP_TOOLS = Object.freeze([
   'cad_execute_plan',
   'cad_inspect_body',
   'cad_query_body_topology',
+  'cad_query_sketch_profiles',
+  'cad_check_geometry_relation',
+  'cad_check_subshape_relation',
+  'cad_measure_geometry',
   'cad_query_component_mate_references',
   'cad_rollback_last_ai_transaction',
 ]);
@@ -46,9 +84,10 @@ export const AI_AGENT_BRIDGE_COMPATIBILITY = Object.freeze({
   protocol: AGENT_BRIDGE_PROTOCOL,
   codexAppServer: Object.freeze({
     minimumVersion: CODEX_APP_SERVER_MIN_VERSION,
-    maximumExclusiveVersion: CODEX_APP_SERVER_MAX_EXCLUSIVE_VERSION,
+    testedMinimumVersion: CODEX_APP_SERVER_TESTED_MIN_VERSION,
+    testedMaximumVersion: CODEX_APP_SERVER_TESTED_MAX_VERSION,
     testedVersions: CODEX_APP_SERVER_TESTED_VERSIONS,
-    newerVersionBehavior: 'fail_closed_until_schema_recertified',
+    newerVersionBehavior: 'allow_when_required_stable_schema_is_compatible_with_warning',
     transport: 'stdio',
     experimentalWebSocketAllowed: false,
     persistentConfigWritesAllowed: false,
@@ -91,6 +130,11 @@ export const AI_AGENT_BRIDGE_COMPATIBILITY = Object.freeze({
       'item/fileChange/requestApproval',
       'item/permissions/requestApproval',
       'item/tool/requestUserInput',
+      'mcpServer/elicitation/request',
+    ]),
+    requiredServerRequestWireValues: Object.freeze([
+      'form',
+      'openai/form',
     ]),
     requiredTunaCadMcpTools: TUNACAD_REQUIRED_MCP_TOOLS,
     timingPolicy: AGENT_BRIDGE_TIMING_POLICY,

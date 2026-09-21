@@ -25,7 +25,7 @@ try {
     'scripts/build-agent-bridge-release.mjs',
     '--output', outputRoot,
     '--source-commit', sourceCommit,
-    '--release-tag', 'agent-bridge-v0.2.10',
+    '--release-tag', 'agent-bridge-v0.2.14',
   ], {
     env: {
       ...process.env,
@@ -49,9 +49,10 @@ try {
   ]), 'Release digest verifier CLI');
   assert.equal(manifest.source.repository, AGENT_BRIDGE_RELEASE_REPOSITORY);
   assert.equal(manifest.source.workflow, AGENT_BRIDGE_RELEASE_WORKFLOW);
-  assert.equal(manifest.package.exactSpecifier, '@tunacad/agent-bridge@0.2.10');
-  assert.equal(manifest.trustPolicy.npmSigstoreProvenanceRequired, true);
-  assert.equal(manifest.trustPolicy.githubArtifactAttestationRequired, true);
+  assert.equal(manifest.package.exactSpecifier, '@tunacad/agent-bridge@0.2.14');
+  assert.equal(manifest.trustPolicy.publisher, 'npm_interactive_2fa');
+  assert.equal(manifest.trustPolicy.npmSigstoreProvenanceRequired, false);
+  assert.equal(manifest.trustPolicy.githubArtifactAttestationRequired, false);
   assert.deepEqual(manifest.manualAcceptance.physicalInstallUpdateUninstallPending, ['darwin', 'linux']);
 
   const tampered = Buffer.from(tarballBytes);
@@ -62,9 +63,9 @@ try {
   );
   assert.throws(() => assertAgentBridgeReleaseManifest({
     ...manifest,
-    trustPolicy: { ...manifest.trustPolicy, npmSigstoreProvenanceRequired: false },
+    trustPolicy: { ...manifest.trustPolicy, npmSigstoreProvenanceRequired: true },
   }), /trust policy/);
-  assert.throws(() => assertAgentBridgeReleaseTag('v0.2.10', '0.2.10'), /agent-bridge-v0.2.10/);
+  assert.throws(() => assertAgentBridgeReleaseTag('v0.2.14', '0.2.14'), /agent-bridge-v0.2.14/);
 
   await writeFile(path.resolve(temporaryRoot, 'preserved-codex-config.toml'), 'model = "unchanged"\n', 'utf8');
   await writeFile(path.resolve(temporaryRoot, 'preserved-cursor-state.json'), '{"schemaVersion":1,"sessions":{}}\n', 'utf8');
@@ -77,7 +78,7 @@ try {
     cwd: consumerRoot,
   }), 'Exact local release installation');
   const installedPackage = path.resolve(consumerRoot, 'node_modules/@tunacad/agent-bridge/package.json');
-  assert.equal(JSON.parse(await readFile(installedPackage, 'utf8')).version, '0.2.10');
+  assert.equal(JSON.parse(await readFile(installedPackage, 'utf8')).version, '0.2.14');
   requireSuccess(runNpm(['uninstall', '--no-audit', '--no-fund', '@tunacad/agent-bridge'], {
     cwd: consumerRoot,
   }), 'Local release uninstall');
@@ -88,22 +89,15 @@ try {
   const packageJson = JSON.parse(await readFile(path.resolve(packageRoot, 'package.json'), 'utf8'));
   assert.equal(packageJson.repository.url, 'git+https://github.com/JNaruto-mar/TunaCAD-Agent-Bridge.git');
   assert.equal(packageJson.repository.directory, 'agent-bridge');
+  assert.equal(packageJson.publishConfig.access, 'public');
+  assert.equal(packageJson.publishConfig.provenance, false);
+  const readme = await readFile(path.resolve(packageRoot, 'README.md'), 'utf8');
+  assert.match(readme, /npm login --auth-type=web/);
+  assert.match(readme, /npm publish --dry-run --access public --provenance=false/);
+  assert.match(readme, /npm publish --access public --provenance=false/);
+  assert.doesNotMatch(readme, /published only by the protected|Sigstore provenance; GitHub separately attests/);
 
-  const workflow = await readReleaseWorkflow();
-  assert.match(workflow, /id-token:\s*write/);
-  assert.match(workflow, /attestations:\s*write/);
-  assert.match(workflow, /actions\/attest@v4/);
-  assert.match(workflow, /environment:\s*agent-bridge-production/);
-  assert.match(workflow, /npm publish/);
-  assert.match(workflow, /npm audit signatures/);
-  assert.match(workflow, /for attempt[\s\S]*npm install[\s\S]*npm audit signatures/);
-  assert.ok(
-    workflow.indexOf('Upload signed release subjects')
-      < workflow.indexOf('Verify published registry signatures and Sigstore provenance'),
-  );
-  assert.doesNotMatch(workflow, /NPM_TOKEN|NODE_AUTH_TOKEN/);
-
-  process.stdout.write('[agent-bridge] OIDC release, attestations, digest verification, exact update, and non-destructive uninstall fixtures passed.\n');
+  process.stdout.write('[agent-bridge] Interactive 2FA release, digest verification, exact update, and non-destructive uninstall fixtures passed.\n');
 } finally {
   const resolved = path.resolve(temporaryRoot);
   assert.ok(resolved.startsWith(`${path.resolve(os.tmpdir())}${path.sep}`));
@@ -138,19 +132,4 @@ function runNpm(args, options = {}) {
 
 function requireSuccess(result, label) {
   assert.equal(result.status, 0, `${label} failed.\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`);
-}
-
-async function readReleaseWorkflow() {
-  const candidates = [
-    path.resolve(repositoryRoot, '.github/workflows/publish.yml'),
-    path.resolve(repositoryRoot, 'agent-bridge/release/publish.yml'),
-  ];
-  for (const candidate of candidates) {
-    try {
-      return await readFile(candidate, 'utf8');
-    } catch (error) {
-      if (error?.code !== 'ENOENT') throw error;
-    }
-  }
-  throw new Error('The public Agent Bridge release workflow or its TunaCAD source template is missing.');
 }

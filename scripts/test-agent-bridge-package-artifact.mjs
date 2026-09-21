@@ -4,14 +4,17 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const repositoryRoot = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const packageRoot = path.resolve(repositoryRoot, 'agent-bridge');
 const assemblyPath = path.resolve(packageRoot, 'dist/ASSEMBLY.json');
-const npmInvocation = process.env.npm_execpath
-  ? { command: process.execPath, prefix: [process.env.npm_execpath] }
-  : { command: process.platform === 'win32' ? 'npm.cmd' : 'npm', prefix: [] };
+// Node 24 cannot spawn .cmd shims directly on Windows (EINVAL); use npm's JS entry point.
+const npmCli = process.env.npm_execpath
+  ?? (process.platform === 'win32' ? path.resolve(path.dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js') : null);
+const npmInvocation = npmCli
+  ? { command: process.execPath, prefix: [npmCli] }
+  : { command: 'npm', prefix: [] };
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
@@ -66,7 +69,7 @@ try {
   assert.equal(assembly.packageName, '@tunacad/agent-bridge');
   assert.equal(assembly.packageVersion, packageJson.version);
   assert.equal(assembly.protocol, 'tunacad.agent-bridge/1');
-  assert.equal(assembly.files.length, 16);
+  assert.equal(assembly.files.length, 18);
   assert.equal(new Set(assembly.files.map((file) => file.path)).size, assembly.files.length);
   assert.deepEqual(shrinkwrap.packages[''].dependencies, packageJson.dependencies);
   assert.equal(shrinkwrap.packages[''].version, packageJson.version);
@@ -151,6 +154,17 @@ try {
     temporaryRoot,
     'node_modules/@tunacad/agent-bridge/dist/agent-bridge/bin/tunacad-agent-bridge.mjs',
   );
+  const installedRegistry = path.resolve(
+    temporaryRoot,
+    'node_modules/@tunacad/agent-bridge/dist/agent-bridge/src/agent-adapter-registry.mjs',
+  );
+  const { createAgentAdapter, parseAgentProvider } = await import(pathToFileURL(installedRegistry).href);
+  assert.equal(parseAgentProvider('claude'), 'claude');
+  const claude = createAgentAdapter({
+    provider: 'claude',
+    pairing: { mcpUrl: 'https://tunacad.invalid/mcp/test', agentToken: 'package-fixture-token' },
+  });
+  assert.equal(claude.constructor.name, 'ClaudeCliAdapter');
   const smoke = run(process.execPath, [installedCli], { cwd: temporaryRoot });
   assert.equal(smoke.status, 1, `CLI without arguments should show usage.\n${smoke.stderr}`);
   assert.match(`${smoke.stdout}\n${smoke.stderr}`, /Usage:.*tunacad-agent-bridge/s);

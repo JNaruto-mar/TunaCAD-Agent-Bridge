@@ -2,6 +2,7 @@ export const CODEX_APPROVAL_REQUEST_METHODS = Object.freeze([
   'item/commandExecution/requestApproval',
   'item/fileChange/requestApproval',
   'item/permissions/requestApproval',
+  'mcpServer/elicitation/request',
 ]);
 
 export const CODEX_USER_INPUT_REQUEST_METHOD = 'item/tool/requestUserInput';
@@ -48,6 +49,41 @@ const phaseForTool = (name) => {
   if (normalized.includes('cad_inspect')) return ['inspecting_result', 'Inspecting result'];
   if (normalized.includes('cad_get_') || normalized.includes('cad_search')) return ['inspecting_project', 'Inspecting project'];
   return null;
+};
+
+const commandActivityTitle = (command) => {
+  const normalized = String(command ?? '').toLowerCase();
+  if (normalized.includes('control-in-app-browser') || normalized.includes('playwright') || normalized.includes('browser')) {
+    return 'Preparing browser-assisted CAD work';
+  }
+  if (normalized.includes('wrangler') || normalized.includes('deploy')) return 'Preparing TunaCAD deployment';
+  if (normalized.includes('npm') && normalized.includes('test')) return 'Checking the TunaCAD integration';
+  if (normalized.includes('npm') && normalized.includes('build')) return 'Building TunaCAD';
+  if (normalized.includes('git ')) return 'Reviewing project changes';
+  if (normalized.includes('rg ') || normalized.includes('get-content') || normalized.includes('select-string')) {
+    return 'Inspecting project context';
+  }
+  return 'Running a local project task';
+};
+
+const visibleToolTitle = (item) => {
+  if (item?.type === 'commandExecution') return commandActivityTitle(item.command);
+  if (item?.type === 'fileChange') return 'Preparing project file changes';
+  if (item?.type === 'webSearch') return 'Searching reference information';
+  return null;
+};
+
+const visibleToolSummary = (item, status) => {
+  if (item?.type === 'commandExecution') {
+    return status === 'failed' ? 'The local project task failed.' : 'The local project task finished.';
+  }
+  if (item?.type === 'fileChange') {
+    return status === 'failed' ? 'The project file change failed.' : 'The project file change finished.';
+  }
+  if (item?.type === 'webSearch') {
+    return status === 'failed' ? 'The reference search failed.' : 'The reference search finished.';
+  }
+  return text(item?.error?.message ?? item?.result, 2_000);
 };
 
 const normalizeToolStatus = (status) => {
@@ -118,7 +154,7 @@ export function mapCodexNotification(message, context = {}) {
         ...refs,
         toolCallId: requiredId(item.id, 'item ID'),
         toolName: name,
-        ...(text(item.command ?? item.query, 240) ? { title: text(item.command ?? item.query, 240) } : {}),
+        ...(visibleToolTitle(item) ? { title: visibleToolTitle(item) } : {}),
       });
       const phase = phaseForTool(name);
       return phase
@@ -142,14 +178,14 @@ export function mapCodexNotification(message, context = {}) {
     }
     const name = toolName(item);
     if (!name) return [];
+    const status = normalizeToolStatus(item.status);
+    const summary = visibleToolSummary(item, status);
     return [event('tool.completed', {
       ...threadAndTurn(params),
       toolCallId: requiredId(item.id, 'item ID'),
       toolName: name,
-      status: normalizeToolStatus(item.status),
-      ...(text(item.error?.message ?? item.result, 2_000)
-        ? { summary: text(item.error?.message ?? item.result, 2_000) }
-        : {}),
+      status,
+      ...(summary ? { summary } : {}),
     })];
   }
   if (message.method === 'turn/completed') {
@@ -227,14 +263,36 @@ const permissionDetails = (permissions) => {
   };
 };
 
+const mcpToolApproval = (message) => {
+  const params = message?.params ?? {};
+  const mode = params.mode ?? 'form';
+  const meta = params._meta ?? {};
+  if (params.serverName !== 'tunacad'
+    || !['form', 'openai/form'].includes(mode)
+    || meta.codex_approval_kind !== 'mcp_tool_call'
+    || !params.requestedSchema
+    || typeof params.requestedSchema !== 'object'
+    || Array.isArray(params.requestedSchema)) {
+    return null;
+  }
+  requiredId(params.threadId, 'thread ID');
+  if (params.turnId !== null && params.turnId !== undefined) requiredId(params.turnId, 'turn ID');
+  const persistence = Array.isArray(meta.persist) ? meta.persist : [meta.persist];
+  return {
+    params,
+    meta,
+    sessionPersistence: persistence.includes('session'),
+  };
+};
+
 export function mapCodexServerRequest(message) {
   if (!message || !Object.hasOwn(message, 'id') || typeof message.method !== 'string') return null;
   if (message.method !== CODEX_USER_INPUT_REQUEST_METHOD && !CODEX_APPROVAL_REQUEST_METHODS.includes(message.method)) {
     return null;
   }
   const params = message.params ?? {};
-  const refs = threadAndTurn(params);
   if (message.method === CODEX_USER_INPUT_REQUEST_METHOD) {
+    const refs = threadAndTurn(params);
     return event('user_input.requested', {
       inputRequestId: requestCorrelation(message.id, 'input'),
       ...refs,
@@ -254,6 +312,27 @@ export function mapCodexServerRequest(message) {
     }, message.id);
   }
   const approvalId = requestCorrelation(message.id, 'approval');
+  if (message.method === 'mcpServer/elicitation/request') {
+    const approval = mcpToolApproval(message);
+    if (!approval) return null;
+    const options = [
+      { value: 'accept', label: 'Allow once' },
+      ...(approval.sessionPersistence
+        ? [{ value: 'accept_for_session', label: 'Allow for session' }]
+        : []),
+      { value: 'decline', label: 'Decline' },
+      { value: 'cancel', label: 'Cancel run' },
+    ];
+    return event('approval.requested', {
+      approvalId,
+      domain: 'agent',
+      kind: 'permissions',
+      title: text(approval.meta.tool_title, 240) ?? 'Allow this TunaCAD MCP tool call?',
+      description: text(params.message, 4_000)
+        ?? 'Codex requests permission to call a TunaCAD MCP tool.',
+      options,
+    }, message.id);
+  }
   if (message.method === 'item/commandExecution/requestApproval') {
     const network = params.networkApprovalContext;
     return event('approval.requested', {
@@ -300,6 +379,22 @@ export function createCodexApprovalResponse(request, decision) {
   }
   if (!['accept', 'accept_for_session', 'decline', 'cancel'].includes(decision)) {
     throw new Error('Unsupported approval decision.');
+  }
+  if (request.method === 'mcpServer/elicitation/request') {
+    const approval = mcpToolApproval(request);
+    if (!approval) throw new Error('Unsupported MCP elicitation request.');
+    if (decision === 'accept_for_session' && !approval.sessionPersistence) {
+      throw new Error('This MCP elicitation does not permit session-scoped approval.');
+    }
+    const accepted = decision === 'accept' || decision === 'accept_for_session';
+    return {
+      response: {
+        action: accepted ? 'accept' : decision,
+        content: null,
+        _meta: decision === 'accept_for_session' ? { persist: 'session' } : null,
+      },
+      interruptTurn: false,
+    };
   }
   if (request.method === 'item/permissions/requestApproval') {
     const accepted = decision === 'accept' || decision === 'accept_for_session';

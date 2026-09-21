@@ -1,36 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const AGENT_BRIDGE_RELEASE_REPOSITORY = 'JNaruto-mar/TunaCAD-Agent-Bridge';
-export const AGENT_BRIDGE_RELEASE_WORKFLOW = '.github/workflows/publish.yml';
-
-export function parseNpmPackMetadata(serialized) {
-  const parsed = JSON.parse(serialized);
-  let metadata;
-  if (Array.isArray(parsed)) {
-    if (parsed.length !== 1) throw new Error('npm pack must describe exactly one package.');
-    [metadata] = parsed;
-  } else if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-    && typeof parsed.name === 'string') {
-    metadata = parsed;
-  } else if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-    const entries = Object.entries(parsed);
-    if (entries.length !== 1) throw new Error('npm pack must describe exactly one package.');
-    const [packageName, packageMetadata] = entries[0];
-    if (packageMetadata?.name !== packageName) {
-      throw new Error('npm pack package key does not match its metadata.');
-    }
-    metadata = packageMetadata;
-  }
-  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)
-    || typeof metadata.name !== 'string'
-    || typeof metadata.version !== 'string'
-    || typeof metadata.filename !== 'string'
-    || typeof metadata.integrity !== 'string'
-    || !Array.isArray(metadata.files)) {
-    throw new Error('npm pack returned invalid package metadata.');
-  }
-  return metadata;
-}
+export const AGENT_BRIDGE_RELEASE_WORKFLOW = 'manual_terminal';
 
 export function createAgentBridgeReleaseManifest({
   packageName,
@@ -70,12 +41,12 @@ export function createAgentBridgeReleaseManifest({
       assemblySha256: digest('sha256', assemblyBytes, 'hex'),
     },
     trustPolicy: {
-      publisher: 'npm_trusted_publishing_github_oidc',
+      publisher: 'npm_interactive_2fa',
       npmRegistrySignatureRequired: true,
-      npmSigstoreProvenanceRequired: true,
-      githubArtifactAttestationRequired: true,
+      npmSigstoreProvenanceRequired: false,
+      githubArtifactAttestationRequired: false,
       exactVersionRequired: true,
-      verificationCommands: ['npm_audit_signatures', 'gh_attestation_verify'],
+      verificationCommands: ['npm_view_dist_integrity', 'exact_install', 'npm_audit_signatures'],
     },
     platformPolicy: {
       portableNpmTarball: true,
@@ -117,13 +88,15 @@ export function assertAgentBridgeReleaseManifest(artifact) {
     throw new Error('Invalid Agent Bridge release digest.');
   }
   const trust = artifact.trustPolicy;
-  if (trust?.publisher !== 'npm_trusted_publishing_github_oidc'
+  if (trust?.publisher !== 'npm_interactive_2fa'
     || trust.npmRegistrySignatureRequired !== true
-    || trust.npmSigstoreProvenanceRequired !== true
-    || trust.githubArtifactAttestationRequired !== true
+    || trust.npmSigstoreProvenanceRequired !== false
+    || trust.githubArtifactAttestationRequired !== false
     || trust.exactVersionRequired !== true
+    || !trust.verificationCommands?.includes('npm_view_dist_integrity')
+    || !trust.verificationCommands?.includes('exact_install')
     || !trust.verificationCommands?.includes('npm_audit_signatures')
-    || !trust.verificationCommands?.includes('gh_attestation_verify')) {
+  ) {
     throw new Error('Agent Bridge release trust policy is incomplete.');
   }
   if (artifact.platformPolicy?.portableNpmTarball !== true

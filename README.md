@@ -1,6 +1,6 @@
 # TunaCAD Agent Bridge
 
-Public, auditable source for `@tunacad/agent-bridge`, the local authenticated companion between a TunaCAD browser workspace and Codex App Server.
+Public, auditable source for `@tunacad/agent-bridge`, the local authenticated companion between a TunaCAD browser workspace and Codex CLI, Gemini CLI, or Claude Code CLI.
 
 The companion uses process-scoped MCP configuration and keeps pairing and MCP credentials in memory. It does not edit persistent Codex configuration. See [agent-bridge/README.md](agent-bridge/README.md) for installation and usage.
 

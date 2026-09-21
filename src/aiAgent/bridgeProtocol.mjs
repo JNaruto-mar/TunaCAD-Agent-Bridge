@@ -137,6 +137,7 @@ const heartbeatPong = envelope('heartbeat.pong', z.object({ nonce: opaqueId }).s
 const bridgeReady = envelope('bridge.ready', z.object({
   bridge: clientInfo,
   agent: z.object({ name: z.string().min(1).max(80), version: z.string().min(1).max(40) }).strict(),
+  compatibilityWarning: optionalBoundedText(500),
   supportedProtocols: z.array(protocol).length(1),
   lastAcceptedSequence: acceptedSequence,
 }).strict());

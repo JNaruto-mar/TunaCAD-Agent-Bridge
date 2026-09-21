@@ -2,9 +2,13 @@ import { EventEmitter } from 'node:events';
 import {
   CodexAppServerClient,
   assertSupportedCodexVersion,
+  classifyCodexVersion,
   readCodexVersion,
 } from '../../scripts/lib/codex-app-server-client.mjs';
+import { generateAndValidateCodexSchemas } from '../../scripts/lib/codex-schema-compatibility.mjs';
 import {
+  CODEX_APPROVAL_REQUEST_METHODS,
+  CODEX_USER_INPUT_REQUEST_METHOD,
   createCodexApprovalResponse,
   createCodexUserInputResponse,
   mapCodexNotification,
@@ -21,6 +25,10 @@ import {
 } from './agent-adapter-contract.mjs';
 
 export const TUNACAD_MCP_TOKEN_ENVIRONMENT_VARIABLE = 'TUNACAD_MCP_AGENT_TOKEN';
+const supportedServerRequestMethods = new Set([
+  ...CODEX_APPROVAL_REQUEST_METHODS,
+  CODEX_USER_INPUT_REQUEST_METHOD,
+]);
 export const CODEX_AGENT_CAPABILITIES = createAgentAdapterCapabilities({
   interactiveAuthentication: true,
   threadResume: true,
@@ -37,6 +45,7 @@ export class CodexAppServerAdapter extends EventEmitter {
     codexBinary = process.platform === 'win32' ? 'codex.cmd' : 'codex',
     cwd = process.cwd(),
     versionReader = readCodexVersion,
+    schemaQualifier = generateAndValidateCodexSchemas,
     clientFactory = (options) => new CodexAppServerClient(options),
   }) {
     super();
@@ -45,6 +54,7 @@ export class CodexAppServerAdapter extends EventEmitter {
     this.codexBinary = codexBinary;
     this.cwd = cwd;
     this.versionReader = versionReader;
+    this.schemaQualifier = schemaQualifier;
     this.clientFactory = clientFactory;
     this.client = null;
     this.version = null;
@@ -54,6 +64,7 @@ export class CodexAppServerAdapter extends EventEmitter {
     this.pendingRequestAliases = new Map();
     this.toolNames = new Map();
     this.pendingLogin = null;
+    this.compatibilityWarning = null;
     this.capabilities = CODEX_AGENT_CAPABILITIES;
   }
 
@@ -61,6 +72,19 @@ export class CodexAppServerAdapter extends EventEmitter {
     if (this.client) throw new Error('Codex App Server adapter is already connected.');
     const versionResult = this.versionReader(this.codexBinary);
     this.version = assertSupportedCodexVersion(versionResult.version);
+    const versionCompatibility = classifyCodexVersion(this.version);
+    const schemaCompatibility = await this.schemaQualifier(this.codexBinary, { version: this.version });
+    if (!schemaCompatibility?.compatible) {
+      throw new Error(
+        `Codex ${this.version} is missing or incompatible with required stable app-server features: `
+        + formatSchemaIncompatibility(schemaCompatibility),
+      );
+    }
+    this.compatibilityWarning = versionCompatibility.newerThanTestedRange
+      ? `Codex ${this.version} is newer than TunaCAD's tested range through `
+        + `${versionCompatibility.testedMaximumVersion}. Required stable app-server features are compatible, `
+        + 'so chat remains enabled.'
+      : null;
     const args = createCodexLaunchArguments(this.pairing.mcpUrl);
     const env = {
       ...process.env,
@@ -70,7 +94,7 @@ export class CodexAppServerAdapter extends EventEmitter {
     this.client = client;
     client.on('notification', (message) => this.#onNotification(message));
     client.on('serverRequest', (message) => this.#onServerRequest(message));
-    client.on('protocolError', (error) => this.emit('error', error));
+    client.on('protocolError', (error) => this.emit('protocolWarning', error));
     client.on('exit', ({ code, signal }) => {
       if (this.client === client) this.emit('exit', { code, signal });
     });
@@ -78,8 +102,8 @@ export class CodexAppServerAdapter extends EventEmitter {
       await client.start({
         name: 'tunacad_agent_bridge',
         title: 'TunaCAD Agent Bridge',
-        version: '0.2.10',
-      });
+        version: '0.2.15',
+      }, { mcpServerOpenaiFormElicitation: true });
       const accountResult = await client.request('account/read', { refreshToken: false });
       const configResult = await client.request('config/read', { includeLayers: false });
       assertProcessScopedMcpConfig(configResult, this.pairing);
@@ -213,6 +237,14 @@ export class CodexAppServerAdapter extends EventEmitter {
   }
 
   #onNotification(message) {
+    try {
+      this.#handleNotification(message);
+    } catch (error) {
+      this.emit('protocolWarning', error);
+    }
+  }
+
+  #handleNotification(message) {
     if (message.method === 'account/updated') {
       this.account = normalizeAccountNotification(message.params);
       this.emit('event', { type: 'account.updated', payload: this.account });
@@ -231,7 +263,7 @@ export class CodexAppServerAdapter extends EventEmitter {
         if (resolved.descriptor) this.emit('event', toContractEvent(resolved.descriptor));
         this.emit('timing', resolved.timing);
       } catch (error) {
-        this.emit('error', error);
+        this.emit('protocolWarning', error);
       }
       return;
     }
@@ -258,7 +290,19 @@ export class CodexAppServerAdapter extends EventEmitter {
       if (alias) this.pendingRequestAliases.set(alias, request);
       this.emit('event', toContractEvent(descriptor));
     } catch (error) {
-      this.emit('error', error);
+      const method = typeof request?.method === 'string' ? request.method : '';
+      const supported = supportedServerRequestMethods.has(method);
+      try {
+        this.#requiredClient().respondError(request?.id, {
+          code: supported ? -32602 : -32601,
+          message: supported
+            ? `Invalid params for Codex server request ${method}.`
+            : `TunaCAD does not support Codex server request ${safeMethodName(method)}.`,
+        });
+      } catch (responseError) {
+        this.emit('protocolWarning', responseError);
+      }
+      this.emit('protocolWarning', error);
     }
   }
 
@@ -289,6 +333,22 @@ export class CodexAppServerAdapter extends EventEmitter {
     }
     return Object.freeze({ loginId: login.loginId, account: this.account });
   }
+}
+
+function safeMethodName(method) {
+  return /^[A-Za-z0-9_.:/-]{1,160}$/.test(method) ? method : 'with an invalid method name';
+}
+
+function formatSchemaIncompatibility(compatibility) {
+  if (!compatibility || typeof compatibility !== 'object') return 'schema probe returned no result';
+  const missing = [
+    ...(compatibility.missingMethods ?? []),
+    ...(compatibility.missingClientWireValues ?? []),
+    ...(compatibility.missingNotifications ?? []),
+    ...(compatibility.missingServerRequests ?? []),
+    ...(compatibility.missingServerRequestWireValues ?? []),
+  ];
+  return missing.length ? `missing ${missing.join(', ')}` : 'schema probe reported an incompatible result';
 }
 
 export function createCodexLaunchArguments(mcpUrl) {

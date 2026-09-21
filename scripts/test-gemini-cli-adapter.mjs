@@ -17,15 +17,18 @@ const pairing = {
   agentToken: 'secret-agent-token-phase36b',
 };
 const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'tunacad-gemini-adapter-test-'));
+const compatibleHelp = '--output-format stream-json --allowed-mcp-server-names --extensions --resume';
 const stateRoot = path.join(temporaryRoot, 'state');
 const launches = [];
 let launchIndex = 0;
 
 try {
-  assert.equal(assertSupportedGeminiCliVersion('0.52.0'), '0.52.0');
-  assert.equal(assertSupportedGeminiCliVersion('0.52.99'), '0.52.99');
-  assert.throws(() => assertSupportedGeminiCliVersion('0.51.9'), /not certified/);
-  assert.throws(() => assertSupportedGeminiCliVersion('0.53.0'), /not certified/);
+  assert.equal(assertSupportedGeminiCliVersion({ version: '0.57.0', help: compatibleHelp }), '0.57.0');
+  assert.equal(assertSupportedGeminiCliVersion({ version: '0.56.9', help: compatibleHelp }), '0.56.9');
+  assert.equal(assertSupportedGeminiCliVersion({ version: '0.60.0', help: compatibleHelp }), '0.60.0');
+  assert.equal(assertSupportedGeminiCliVersion({ version: '0.61.0', help: compatibleHelp }), '0.61.0');
+  assert.throws(() => assertSupportedGeminiCliVersion({ version: '0.56.9', help: '--output-format stream-json' }), /lacks required.*--allowed-mcp-server-names.*--extensions.*--resume/);
+  assert.throws(() => assertSupportedGeminiCliVersion({ version: 'unknown', help: compatibleHelp }), /version is unrecognized/);
   assert.deepEqual(createGeminiLaunchArguments(), [
     '--output-format', 'stream-json', '--allowed-mcp-server-names', 'tunacad', '--extensions', 'none',
   ]);
@@ -41,7 +44,7 @@ try {
     environment: {},
     stateRoot,
     temporaryRoot,
-    versionReader: () => ({ version: '0.52.0' }),
+    versionReader: () => ({ version: '0.57.0', help: compatibleHelp }),
   });
   const unauthenticatedConnection = await unauthenticated.connect();
   assert.equal(unauthenticatedConnection.account.requiresAuthentication, true);
@@ -55,7 +58,7 @@ try {
       environment: { GEMINI_API_KEY: 'secret-gemini-api-key' },
       stateRoot,
       temporaryRoot,
-      versionReader: () => ({ version: '0.52.7' }),
+      versionReader: () => ({ version: '0.57.0', help: compatibleHelp }),
       uuid: sequenceUuid(),
       processFactory(options) {
         launches.push(options);
@@ -83,7 +86,7 @@ try {
   adapter.on('error', (error) => errors.push(error));
   const connection = await adapter.connect();
   assert.equal(connection.agent.id, 'gemini-cli');
-  assert.equal(connection.agent.version, '0.52.7');
+  assert.equal(connection.agent.version, '0.57.0');
   assert.equal(connection.account.authMode, 'apikey');
   assert.equal(connection.account.requiresAuthentication, false);
 
@@ -153,9 +156,50 @@ try {
 
   await adapter.close();
   await assert.rejects(() => readFile(settingsPath, 'utf8'));
-  console.log('[phase3.6] Gemini CLI 0.52.x streaming, resume, cancellation, MCP isolation, redaction, and registry fixtures passed.');
+
+  const failingAdapter = new GeminiCliAdapter({
+    pairing,
+    environment: { GEMINI_API_KEY: 'secret-gemini-api-key' },
+    stateRoot,
+    temporaryRoot,
+    versionReader: () => ({ version: '0.57.0', help: compatibleHelp }),
+    processFactory: () => new FixtureFailingGeminiProcess(),
+  });
+  const failureDiagnostics = [];
+  failingAdapter.on('error', (error) => failureDiagnostics.push(error.message));
+  await failingAdapter.connect();
+  const failingThread = await failingAdapter.startThread();
+  await failingAdapter.startTurn(failingThread.threadId, 'Discover TunaCAD tools.');
+  await waitFor(() => failureDiagnostics.length === 1);
+  assert.match(failureDiagnostics[0], /GEMINI_TURN_FAILED.*Provider diagnostic.*MCP discovery failed/);
+  assert.doesNotMatch(failureDiagnostics[0], /secret-provider-token/);
+  assert.match(failureDiagnostics[0], /authorization=\[REDACTED\]/i);
+  await failingAdapter.close();
+  console.log('[phase3.6] Gemini CLI capability-compatible streaming, resume, cancellation, MCP isolation, redaction, and registry fixtures passed.');
 } finally {
   await rm(temporaryRoot, { recursive: true, force: true });
+}
+
+function FixtureFailingGeminiProcess() {
+  const fixture = new EventEmitter();
+  fixture.stdout = new PassThrough();
+  fixture.stderr = new PassThrough();
+  fixture.stdin = new Writable({
+    write(_chunk, _encoding, callback) { callback(); },
+    final(callback) {
+      queueMicrotask(() => {
+        fixture.stdout.write(`${JSON.stringify({ type: 'init', session_id: '30000000-0000-4000-8000-000000000099' })}\n`);
+        fixture.stderr.write('MCP discovery failed authorization=secret-provider-token\n');
+        fixture.stdout.write(`${JSON.stringify({ type: 'result', status: 'error' })}\n`);
+      });
+      callback();
+    },
+  });
+  fixture.kill = () => {
+    queueMicrotask(() => fixture.emit('exit', 1, null));
+    return true;
+  };
+  return fixture;
 }
 
 function FixtureGeminiProcess({ sessionId, complete }) {

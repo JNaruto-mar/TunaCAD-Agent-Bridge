@@ -33,6 +33,24 @@ const approvalRequests = [
       availableDecisions: ['accept', 'decline', 'cancel'],
     },
   },
+  {
+    id: 703,
+    method: 'mcpServer/elicitation/request',
+    params: {
+      threadId: 'thread:mock', turnId: 'turn:approval', serverName: 'tunacad', mode: 'form',
+      message: 'Allow the TunaCAD MCP simulation request?', requestedSchema: { type: 'object' },
+      _meta: { codex_approval_kind: 'mcp_tool_call', tool_title: 'Run neutral simulation' },
+    },
+  },
+  {
+    id: 704,
+    method: 'mcpServer/elicitation/request',
+    params: {
+      threadId: 'thread:mock', turnId: 'turn:approval', serverName: 'tunacad', mode: 'openai/form',
+      message: 'Allow the TunaCAD MCP analysis request?', requestedSchema: { type: 'object' },
+      _meta: { codex_approval_kind: 'mcp_tool_call', tool_title: 'Run CAD analysis' },
+    },
+  },
 ];
 
 const sendNextApproval = () => {
@@ -57,8 +75,32 @@ lines.on('line', (line) => {
     sendNextApproval();
     return;
   }
+  if (!message.method && message.id === 799) {
+    if (message.error?.code !== -32601) process.exitCode = 2;
+    send({
+      id: 800,
+      method: 'mcpServer/elicitation/request',
+      params: {
+        threadId: 'thread:mock', turnId: 'turn:protocol', serverName: 'untrusted', mode: 'openai/form',
+        requestedSchema: { type: 'object' },
+        _meta: { codex_approval_kind: 'mcp_tool_call' },
+      },
+    });
+    return;
+  }
+  if (!message.method && message.id === 800) {
+    if (message.error?.code !== -32602) process.exitCode = 3;
+    send({ method: 'turn/completed', params: {
+      threadId: 'thread:mock', turn: { id: 'turn:protocol', status: 'completed', items: [] },
+    } });
+    return;
+  }
   if (message.method === 'initialize') {
-    send({ id: message.id, result: { userAgent: 'mock-codex/0.146.0' } });
+    send({ id: message.id, result: {
+      userAgent: 'mock-codex/0.146.0',
+      receivedCapabilities: message.params?.capabilities ?? {},
+      receivedExperimentalApi: message.params?.experimentalApi ?? null,
+    } });
     return;
   }
   if (message.method === 'initialized') return;
@@ -138,6 +180,15 @@ lines.on('line', (line) => {
       send({ method: 'turn/started', params: {
         threadId: 'thread:mock', turn: { id: 'turn:interrupt', status: 'inProgress', items: [] },
       } });
+      return;
+    }
+    if (prompt.includes('PROTOCOL_GUARDS')) {
+      send({ id: message.id, result: { turn: { id: 'turn:protocol', status: 'inProgress', items: [] } } });
+      process.stdout.write('not-json\n');
+      send(null);
+      send({ method: 'thread/started', params: { thread: {} } });
+      send({ method: 'future/notification', params: { value: true } });
+      send({ id: 799, method: 'future/serverRequest', params: {} });
       return;
     }
     send({ id: message.id, result: { turn: { id: 'turn:mock', status: 'inProgress', items: [] } } });

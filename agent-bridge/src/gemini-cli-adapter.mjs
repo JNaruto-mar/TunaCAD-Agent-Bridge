@@ -13,7 +13,6 @@ import {
 } from './agent-adapter-contract.mjs';
 import { createCadApprovalOutcomePrompt, TUNACAD_MCP_TOKEN_ENVIRONMENT_VARIABLE } from './codex-app-server-adapter.mjs';
 
-export const GEMINI_CLI_CERTIFIED_VERSION_RANGE = '0.52.x';
 export const GEMINI_CLI_CAPABILITIES = createAgentAdapterCapabilities({
   threadResume: true,
   turnCancellation: true,
@@ -22,6 +21,7 @@ export const GEMINI_CLI_CAPABILITIES = createAgentAdapterCapabilities({
 
 const GEMINI_API_KEY_ENVIRONMENT_VARIABLE = 'GEMINI_API_KEY';
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,159}$/;
+const MAX_PROVIDER_DIAGNOSTIC_BYTES = 16_000;
 
 export class GeminiCliAdapter extends EventEmitter {
   constructor({
@@ -57,7 +57,7 @@ export class GeminiCliAdapter extends EventEmitter {
   async connect() {
     if (this.closed) throw new Error('Gemini CLI adapter is closed.');
     if (this.version) throw new Error('Gemini CLI adapter is already connected.');
-    this.version = assertSupportedGeminiCliVersion(this.versionReader(this.geminiBinary).version);
+    this.version = assertSupportedGeminiCliVersion(this.versionReader(this.geminiBinary));
     await mkdir(this.stateRoot, { recursive: true, mode: 0o700 });
     this.configurationDirectory = await mkdtemp(path.join(this.temporaryRoot, 'tunacad-gemini-'));
     await writeGeminiProcessConfiguration({
@@ -173,14 +173,15 @@ export class GeminiCliAdapter extends EventEmitter {
         if (line) this.#handleStreamLine(run, line);
       }
     });
-    run.child.stderr?.on?.('data', () => {});
-    run.child.once?.('error', () => this.#failRun(run, 'GEMINI_PROCESS_START_FAILED'));
+    run.child.stderr?.setEncoding?.('utf8');
+    run.child.stderr?.on?.('data', (chunk) => { run.stderrTail = appendDiagnostic(run.stderrTail, chunk); });
+    run.child.once?.('error', (error) => this.#failRun(run, 'GEMINI_PROCESS_START_FAILED', error));
     run.child.once?.('exit', (code, signal) => {
       if (stdoutBuffer.trim()) this.#handleStreamLine(run, stdoutBuffer.trim());
       if (!run.completed) {
         if (run.cancelled) this.#completeRun(run, 'cancelled');
         else if (code === 0) this.#completeRun(run, 'completed');
-        else this.#failRun(run, 'GEMINI_PROCESS_EXITED');
+        else this.#failRun(run, 'GEMINI_PROCESS_EXITED', new Error(`Gemini CLI exited with code ${code ?? 'unknown'}${signal ? ` (signal ${signal})` : ''}.`));
       }
       if (!run.initializedSettled) run.rejectInitialized(new Error(`Gemini CLI did not initialize (${signal ?? code ?? 'unknown'}).`));
       if (this.activeRun === run) this.activeRun = null;
@@ -192,14 +193,14 @@ export class GeminiCliAdapter extends EventEmitter {
     let event;
     try {
       event = JSON.parse(line);
-    } catch {
-      this.#failRun(run, 'GEMINI_INVALID_JSONL');
+    } catch (error) {
+      this.#failRun(run, 'GEMINI_INVALID_JSONL', error);
       return;
     }
     try {
       this.#handleStreamEvent(run, event);
-    } catch {
-      this.#failRun(run, 'GEMINI_INVALID_EVENT');
+    } catch (error) {
+      this.#failRun(run, 'GEMINI_INVALID_EVENT', error);
     }
   }
 
@@ -273,11 +274,12 @@ export class GeminiCliAdapter extends EventEmitter {
     if (this.activeRun === run) this.activeRun = null;
   }
 
-  #failRun(run, code) {
+  #failRun(run, code, cause = null) {
     if (run.completed) return;
     if (!run.initializedSettled) run.rejectInitialized(new Error('Gemini CLI could not initialize safely.'));
     if (run.threadId && !run.threadId.startsWith('gemini-pending:')) this.#completeRun(run, 'failed');
-    this.emit('error', new Error(`${code}: Gemini CLI failed without exposing provider output.`));
+    const details = providerDiagnostic(run, cause);
+    this.emit('error', new Error(`${code}: Gemini CLI failed.${details ? ` ${details}` : ''}`));
     void this.#terminateRun(run);
   }
 
@@ -288,27 +290,42 @@ export class GeminiCliAdapter extends EventEmitter {
   }
 }
 
+const REQUIRED_GEMINI_OPTIONS = Object.freeze([
+  '--output-format',
+  'stream-json',
+  '--allowed-mcp-server-names',
+  '--extensions',
+  '--resume',
+]);
+
 export function readGeminiCliVersion(binary = process.platform === 'win32' ? 'gemini.cmd' : 'gemini') {
-  const invocation = createProcessInvocation(binary, ['--version']);
-  const result = spawnSync(invocation.command, invocation.args, {
-    encoding: 'utf8',
-    windowsHide: true,
-  });
-  if (result.error) throw new Error('Gemini CLI could not be started.');
-  if (result.status !== 0) throw new Error('Gemini CLI version check failed.');
-  const output = `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
-  const match = output.match(/(?:^|\s)(\d+\.\d+\.\d+)(?:\s|$)/);
+  const output = runGeminiProbe(binary, ['--version']);
+  const match = output.match(/(?:^|\s)(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?:\s|$)/);
   if (!match) throw new Error('Gemini CLI returned an unrecognized version.');
-  return Object.freeze({ version: match[1] });
+  return Object.freeze({ version: match[1], help: runGeminiProbe(binary, ['--help']) });
 }
 
-export function assertSupportedGeminiCliVersion(version) {
-  if (!/^0\.52\.\d+$/.test(version ?? '')) {
-    throw new Error(`Gemini CLI ${String(version)} is not certified. TunaCAD Phase 3.6B supports ${GEMINI_CLI_CERTIFIED_VERSION_RANGE}.`);
+function runGeminiProbe(binary, args) {
+  const invocation = createProcessInvocation(binary, args);
+  const result = spawnSync(invocation.command, invocation.args, {
+    encoding: 'utf8', windowsHide: true, timeout: 10_000,
+  });
+  if (result.error || result.status !== 0) {
+    throw new Error(`Gemini CLI ${args[0]} check failed. Install or update Gemini CLI and retry.`);
+  }
+  return `${result.stdout ?? ''}\n${result.stderr ?? ''}`;
+}
+
+export function assertSupportedGeminiCliVersion({ version, help }) {
+  if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version ?? '')) {
+    throw new Error('Gemini CLI version is unrecognized.');
+  }
+  const missing = REQUIRED_GEMINI_OPTIONS.filter((option) => !help?.includes(option));
+  if (missing.length) {
+    throw new Error(`Gemini CLI ${version} lacks required TunaCAD chat options: ${missing.join(', ')}. Update Gemini CLI and retry.`);
   }
   return version;
 }
-
 export function createGeminiLaunchArguments(resumeThreadId = null) {
   if (resumeThreadId !== null) requiredSafeId(resumeThreadId, 'Gemini session ID');
   return [
@@ -406,6 +423,7 @@ function createRun({ child, requestedThreadId, turnId, resumed }) {
     rejectInitialized(error) { if (!run.initializedSettled) { run.initializedSettled = true; rejectInitialized(error); } },
     messageId: `gemini-message:${randomUUID()}`,
     assistantText: '',
+    stderrTail: '',
     tools: new Map(),
     cancelled: false,
     completed: false,
@@ -434,4 +452,23 @@ function requiredToolName(value) {
 function requiredPrompt(value) {
   if (typeof value !== 'string' || !value.trim()) throw new Error('A non-empty Gemini prompt is required.');
   return value;
+}
+
+function appendDiagnostic(previous, chunk) {
+  return `${previous}${String(chunk)}`.slice(-MAX_PROVIDER_DIAGNOSTIC_BYTES);
+}
+
+function providerDiagnostic(run, cause) {
+  const values = [
+    cause instanceof Error ? cause.message : cause ? String(cause) : '',
+    run.stderrTail,
+  ].filter(Boolean).map(redactProviderDiagnostic);
+  return values.length ? `Provider diagnostic: ${values.join(' | ').slice(0, MAX_PROVIDER_DIAGNOSTIC_BYTES)}` : '';
+}
+
+function redactProviderDiagnostic(value) {
+  return String(value)
+    .replace(/(Bearer\s+)[^\s"']+/gi, '$1[REDACTED]')
+    .replace(/(api[_-]?key|token|authorization)\s*[:=]\s*[^\s,;"']+/gi, '$1=[REDACTED]')
+    .replace(/AIza[0-9A-Za-z_-]{20,}/g, '[REDACTED]');
 }

@@ -7,10 +7,11 @@ const options = parseOptions(process.argv.slice(2));
 const manifestPath = path.resolve(options.manifest);
 const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
 const tarballPath = path.resolve(options.tarball ?? path.join(path.dirname(manifestPath), manifest.package.tarballFileName));
+const assemblyPath = path.resolve(options.assembly);
 verifyAgentBridgeReleaseFiles({
   manifest,
   tarballBytes: await readFile(tarballPath),
-  assemblyBytes: await readFile(path.resolve(options.assembly)),
+  assemblyBytes: await readFile(assemblyPath),
 });
 process.stdout.write(`[agent-bridge] Offline digest verification passed for ${manifest.package.exactSpecifier}.\n`);
 process.stdout.write('[agent-bridge] Authenticity still requires npm audit signatures and GitHub artifact attestation verification.\n');

@@ -88,6 +88,19 @@ const pairing = Object.freeze({
   mcpUrl: 'https://tunacad.invalid/mcp/probe',
 });
 const fixture = fileURLToPath(new URL('./fixtures/mock-codex-app-server.mjs', import.meta.url));
+const compatibleSchema = async () => ({ compatible: true });
+await assert.rejects(new CodexAppServerAdapter({
+  pairing,
+  codexBinary: 'codex-test',
+  versionReader: () => ({ version: '0.149.9', output: 'codex-cli 0.149.9' }),
+  schemaQualifier: compatibleSchema,
+}).connect(), /Update Codex CLI to 0\.150\.0 or newer/);
+await assert.rejects(new CodexAppServerAdapter({
+  pairing,
+  codexBinary: 'codex-test',
+  versionReader: () => ({ version: '0.155.2', output: 'codex-cli 0.155.2' }),
+  schemaQualifier: async () => ({ compatible: false, missingMethods: ['turn/start'] }),
+}).connect(), /missing or incompatible.*turn\/start/i);
 const socket = new FakeRelaySocket();
 assert.throws(() => normalizeDeviceCodeLogin({
   type: 'chatgptDeviceCode',
@@ -104,7 +117,8 @@ let launchOptions;
 const adapter = new CodexAppServerAdapter({
   pairing,
   codexBinary: 'codex-test',
-  versionReader: () => ({ version: '0.147.0', output: 'codex-cli 0.147.0' }),
+  versionReader: () => ({ version: '0.155.2', output: 'codex-cli 0.155.2' }),
+  schemaQualifier: compatibleSchema,
   clientFactory: (options) => {
     launchOptions = options;
     return new CodexAppServerClient({
@@ -137,15 +151,27 @@ const runtime = new AgentBridgeRuntime({
 try {
   const started = await runtime.start();
   assert.equal(started.status, 'ready');
-  assert.equal(started.agent.version, '0.147.0');
+  assert.equal(started.agent.version, '0.155.2');
   assert.equal(started.account.authMode, 'chatgpt');
   assert.equal(started.account.requiresAuthentication, false);
   assert.equal(launchOptions.env[TUNACAD_MCP_TOKEN_ENVIRONMENT_VARIABLE], pairing.agentToken);
   assert.equal(JSON.stringify(launchOptions.args).includes(pairing.agentToken), false);
   assert.deepEqual(launchOptions.args, createCodexLaunchArguments(pairing.mcpUrl));
   assert.deepEqual(socket.types().slice(0, 2), ['account.updated', 'bridge.ready']);
-  assert.equal(socket.messages()[1].payload.agent.version, '0.147.0');
+  assert.equal(socket.messages()[1].payload.agent.version, '0.155.2');
+  assert.match(socket.messages()[1].payload.compatibilityWarning, /newer than TunaCAD's tested range through 0\.155\.1/i);
+  assert.equal(started.status, 'ready', 'A schema-compatible newer Codex must remain non-blockingly usable.');
   assert.equal(socket.sent.join('').includes(pairing.agentToken), false);
+
+  const protocolWarnings = [];
+  adapter.on('protocolWarning', (warning) => protocolWarnings.push(warning));
+  const protocolGuardCompletion = adapter.client.waitForNotification(
+    (message) => message.method === 'turn/completed' && message.params?.turn?.id === 'turn:protocol',
+  );
+  await adapter.startTurn('thread:mock', 'PROTOCOL_GUARDS');
+  assert.equal((await protocolGuardCompletion).params.turn.status, 'completed');
+  assert.ok(protocolWarnings.length >= 4, 'Malformed JSON-RPC, notifications, and unsupported requests must be contained.');
+  assert.equal(adapter.requestTracker.pendingCount(), 0);
   adapter.emit('error', new Error(`Bearer ${pairing.agentToken}`));
   assert.equal(socket.messages().at(-1).payload.message, 'Bearer [REDACTED]');
   assert.equal(socket.sent.join('').includes(pairing.agentToken), false);
@@ -197,7 +223,10 @@ try {
     content: 'Run the deterministic companion turn.',
     clientMessageId: 'client:normal',
   }));
-  const completed = await waitForSent(socket, (message) => message.type === 'turn.completed');
+  const completed = await waitForSent(
+    socket,
+    (message) => message.type === 'turn.completed' && message.payload.turnId === 'turn:mock',
+  );
   assert.equal(completed.payload.status, 'completed');
   assert.ok(socket.types().includes('chat.assistant_delta'));
   assert.deepEqual(
@@ -308,7 +337,8 @@ const loginRuntime = new AgentBridgeRuntime({
   adapter: new CodexAppServerAdapter({
     pairing,
     codexBinary: 'codex-test',
-    versionReader: () => ({ version: '0.147.0', output: 'codex-cli 0.147.0' }),
+    versionReader: () => ({ version: '0.150.1', output: 'codex-cli 0.150.1' }),
+    schemaQualifier: compatibleSchema,
     clientFactory: (options) => new CodexAppServerClient({
       command: process.execPath,
       args: [fixture],
@@ -365,7 +395,8 @@ try {
 const cancellationAdapter = new CodexAppServerAdapter({
   pairing,
   codexBinary: 'codex-test',
-  versionReader: () => ({ version: '0.147.0', output: 'codex-cli 0.147.0' }),
+  versionReader: () => ({ version: '0.150.1', output: 'codex-cli 0.150.1' }),
+  schemaQualifier: compatibleSchema,
   clientFactory: (options) => new CodexAppServerClient({
     command: process.execPath,
     args: [fixture],
