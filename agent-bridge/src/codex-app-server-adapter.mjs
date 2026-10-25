@@ -102,7 +102,7 @@ export class CodexAppServerAdapter extends EventEmitter {
       await client.start({
         name: 'tunacad_agent_bridge',
         title: 'TunaCAD Agent Bridge',
-        version: '0.2.15',
+        version: '0.2.16',
       }, { mcpServerOpenaiFormElicitation: true });
       const accountResult = await client.request('account/read', { refreshToken: false });
       const configResult = await client.request('config/read', { includeLayers: false });

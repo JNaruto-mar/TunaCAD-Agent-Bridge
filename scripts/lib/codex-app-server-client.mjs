@@ -36,7 +36,7 @@ export function platformLaunch(command, args) {
 
 export function readCodexVersion(codexBinary = process.platform === 'win32' ? 'codex.cmd' : 'codex') {
   const launch = platformLaunch(codexBinary, ['--version']);
-  const result = spawnSync(launch.command, launch.args, { encoding: 'utf8', windowsHide: true });
+  const result = spawnSync(launch.command, launch.args, { encoding: 'utf8', windowsHide: true, timeout: 10_000 });
   if (result.error) throw result.error;
   if (result.status !== 0) {
     throw new Error((result.stderr || result.stdout || `Codex exited with status ${result.status}.`).trim());

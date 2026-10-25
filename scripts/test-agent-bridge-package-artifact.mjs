@@ -69,12 +69,16 @@ try {
   assert.equal(assembly.packageName, '@tunacad/agent-bridge');
   assert.equal(assembly.packageVersion, packageJson.version);
   assert.equal(assembly.protocol, 'tunacad.agent-bridge/1');
-  assert.equal(assembly.files.length, 18);
+  assert.equal(assembly.files.filter(f=>!f.path.startsWith('external/')).length,30);
+  assert(assembly.files.length>100&&assembly.files.length<250,'Canonical native closure must remain bounded');
   assert.equal(new Set(assembly.files.map((file) => file.path)).size, assembly.files.length);
   assert.deepEqual(shrinkwrap.packages[''].dependencies, packageJson.dependencies);
   assert.equal(shrinkwrap.packages[''].version, packageJson.version);
 
   const generatedPaths = new Set(assembly.files.map((file) => normalize(file.path)));
+  for (const requiredRuntime of ['companion-approval.mjs', 'companion-approval-windows.ps1', 'companion-server.mjs', 'companion-trust-store.mjs', 'companion-discovery.mjs', 'companion-manager.mjs', 'companion-manager-launcher.mjs', 'companion-manager-windows.ps1','companion-simulation.mjs']) {
+    assert.ok(generatedPaths.has('agent-bridge/src/' + requiredRuntime), 'Required Companion runtime missing: ' + requiredRuntime);
+  }
   for (const file of assembly.files) {
     const bytes = await readFile(path.resolve(packageRoot, 'dist', file.path));
     assert.equal(bytes.byteLength, file.bytes, `${file.path} byte count changed after assembly.`);
@@ -91,7 +95,7 @@ try {
 
   const relativeImportPattern = /(?:from\s+|import\s*)['"](\.[^'"]+)['"]/g;
   const allowedExternalImports = new Set(['ws', 'zod/v4']);
-  for (const file of assembly.files.filter((entry) => entry.path.endsWith('.mjs'))) {
+  for (const file of assembly.files.filter((entry) => /\.(mjs|mts|ts)$/.test(entry.path))) {
     const source = await readFile(path.resolve(packageRoot, 'dist', file.path), 'utf8');
     for (const match of source.matchAll(relativeImportPattern)) {
       const resolved = normalize(path.normalize(path.join(path.dirname(file.path), match[1])));
@@ -106,6 +110,12 @@ try {
     }
   }
 
+  if(process.argv.includes('--runtime-only')){
+    const prefix='external/TunaCAD-Simulation-Bridge/';
+    for(const required of ['simulation-bridge/server.mts','simulation-bridge/providers.mts','providers/ComposedExplicitProvider.mts','providers/openradioss/ExplicitBridgeExecution.mts','providers/openradioss/ExplicitBridgeRuntime.mts']){assert(generatedPaths.has(prefix+required));await import(pathToFileURL(path.resolve(packageRoot,'dist',prefix+required)).href);}
+    await import(pathToFileURL(path.resolve(packageRoot,'dist/agent-bridge/src/companion-server.mjs')).href);
+    console.log(JSON.stringify({status:'PASS',scope:'packaged canonical runtime closure, hashes, deterministic assembly and module loading',files:assembly.files.length,nativeSolvers:0,protectedStorageOperations:0}));
+  }else{
   const packed = runNpm(['pack', '--json', '--ignore-scripts', '--pack-destination', temporaryRoot], {
     cwd: packageRoot,
   });
@@ -113,7 +123,10 @@ try {
   const [metadata] = JSON.parse(packed.stdout);
   assert.equal(metadata.name, '@tunacad/agent-bridge');
   assert.match(metadata.integrity, /^sha512-/);
-  assert.ok(metadata.size < 250_000, `Companion tarball unexpectedly large: ${metadata.size} bytes.`);
+  // The reviewed native-runtime closure adds 137 files to the old CLI-only
+  // package (446 KiB compressed). Keep an explicit 512 KiB bound alongside
+  // the exact allowlisted file inventory and per-file SHA-256 verification.
+  assert.ok(metadata.size < 512 * 1024, `Companion tarball unexpectedly large: ${metadata.size} bytes.`);
 
   const archivePath = path.resolve(temporaryRoot, metadata.filename);
   const archive = await readFile(archivePath);
@@ -129,6 +142,7 @@ try {
     'dist/ASSEMBLY.json',
     ...assembly.files.map((file) => `dist/${normalize(file.path)}`),
   ];
+  assert.deepEqual([...packedPaths].sort(), [...requiredPaths].sort(), 'Tarball must contain only the exact reviewed package/runtime inventory.');
   for (const requiredPath of requiredPaths) {
     assert.ok(packedPaths.has(requiredPath), `Tarball is missing ${requiredPath}.`);
   }
@@ -169,10 +183,13 @@ try {
   assert.equal(smoke.status, 1, `CLI without arguments should show usage.\n${smoke.stderr}`);
   assert.match(`${smoke.stdout}\n${smoke.stderr}`, /Usage:.*tunacad-agent-bridge/s);
   assert.doesNotMatch(`${smoke.stdout}\n${smoke.stderr}`, /ERR_MODULE_NOT_FOUND/);
+  const cliFlags = run(process.execPath, ['scripts/test-agent-bridge-cli.mjs', '--cli', installedCli, '--package-json', path.resolve(temporaryRoot, 'node_modules/@tunacad/agent-bridge/package.json')]);
+  requireSuccess(cliFlags, 'Installed package CLI version/routing checks');
 
   console.log(
     `[agent-bridge] Package artifact passed: ${metadata.files.length} files, ${metadata.size} bytes, ${metadata.integrity.slice(0, 28)}…`,
   );
+  }
 } finally {
   const resolvedTemporaryRoot = path.resolve(temporaryRoot);
   assert.ok(

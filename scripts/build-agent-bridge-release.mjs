@@ -78,9 +78,11 @@ function run(command, args, options = {}) {
 }
 
 function runNpm(args, options = {}) {
-  const invocation = process.env.npm_execpath
-    ? { command: process.execPath, prefix: [process.env.npm_execpath] }
-    : { command: process.platform === 'win32' ? 'npm.cmd' : 'npm', prefix: [] };
+  const npmCli = process.env.npm_execpath ?? (process.platform === 'win32'
+    ? path.resolve(path.dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js') : null);
+  const invocation = npmCli
+    ? { command: process.execPath, prefix: [npmCli] }
+    : { command: 'npm', prefix: [] };
   return run(invocation.command, [...invocation.prefix, ...args], options);
 }
 

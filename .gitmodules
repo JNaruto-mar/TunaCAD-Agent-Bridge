@@ -1,0 +1,3 @@
+[submodule "external/TunaCAD-Simulation-Bridge"]
+	path = external/TunaCAD-Simulation-Bridge
+	url = https://github.com/JNaruto-mar/TunaCAD-Simulation-Bridge.git
