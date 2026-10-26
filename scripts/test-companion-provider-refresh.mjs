@@ -1,0 +1,19 @@
+// Constructor-only fixtures. No owner, executable, native consent or user store.
+import assert from 'node:assert/strict';
+import {registerHooks} from 'node:module';
+import {createHmac} from 'node:crypto';
+const target=new URL('../agent-bridge/src/companion-simulation.mjs',import.meta.url).href;
+const fixture={paths:{gmshExecutable:'controlled/gmsh.exe',calculixExecutable:'controlled/ccx216.exe'},loads:0,options:null,closed:0};
+globalThis.__companionRefreshFixture=fixture;
+const hooks=registerHooks({resolve(s,c,next){if(c.parentURL===target&&s.endsWith('/simulation-bridge/providerSettings.mts'))return {url:'fixture:settings',shortCircuit:true};if(c.parentURL===target&&s.endsWith('/simulation-bridge/providers.mts'))return {url:'fixture:providers',shortCircuit:true};if(c.parentURL===target&&s.endsWith('/simulation-bridge/server.mts'))return {url:'fixture:server',shortCircuit:true};return next(s,c);},load(url,c,next){if(!url.startsWith('fixture:'))return next(url,c);const f='globalThis.__companionRefreshFixture';const source=url==='fixture:settings'?`export const openNativeProviderSettings=async()=>({readVerified:async()=>({paths:${f}.paths})});export const resolveConfiguredProviderPaths=p=>({...p});`:url==='fixture:providers'?`export async function loadExternalPipeline(){${f}.loads++;return {provider:null,providerElectrical:null,providerExplicit:${f}.loads===1?{fixture:true}:undefined,readiness:{electrostaticInitialization:{stage:'runtime_identity',code:${f}.loads===1?'ELECTROSTATIC_RUNTIME_PROBE_FAILED':null},meshing:{runtimeVersion:'4.15.2'},explicit:${f}.loads===1?{fixture:true}:undefined}};}`:`export async function startSimulationBridge(options){${f}.options=options;return {url:'http://127.0.0.1:12345',pairingCode:'b'.repeat(32),async endTrustedSession(){return {retainedJobs:0};},async close(){${f}.closed++;}};}`;return {format:'module',source,shortCircuit:true};}});
+const savedFetch=globalThis.fetch;
+globalThis.fetch=async(url,init)=>{assert.equal(url,'http://127.0.0.1:12345/v1/pair');const {challenge,proof}=JSON.parse(init.body),key='b'.repeat(32),token='a'.repeat(64);assert.equal(proof,createHmac('sha256',key).update('client:'+challenge).digest('hex'));return new Response(JSON.stringify({sessionToken:token,expiresAt:Date.now()+60000,serverProof:createHmac('sha256',key).update('server:'+challenge+':'+token).digest('hex')}));};
+try{
+ const {createCompanionSimulationBridge}=await import(target),grant={scope:{workspaceId:'controlled-workspace',capabilities:['electrostatic']}};
+ const owner=await createCompanionSimulationBridge({origin:'https://tunacad.com',grant});assert.equal(fixture.loads,1);assert.equal(fixture.options.trustedSimulationSession,grant);
+ const refresh=fixture.options.configureProviders;assert.equal(typeof refresh,'function');const refreshed=await refresh({...fixture.paths});assert.equal(fixture.loads,2);assert(refreshed.providerExplicit);assert(refreshed.readiness.explicit);assert.equal(refreshed.readiness.electrostaticInitialization.previousFailure.code,'ELECTROSTATIC_RUNTIME_PROBE_FAILED');assert.equal(fixture.options.trustedSimulationSession,grant);assert.equal(fixture.closed,0);
+ await assert.rejects(()=>refresh({...fixture.paths,calculixExecutable:'different/ccx.exe'}),/CONFIGURATION_CHANGED/);assert.equal(fixture.loads,2);
+ const original={...fixture.paths};fixture.paths.calculixExecutable='changed/ccx.exe';await assert.rejects(()=>refresh(original),/CONFIGURATION_CHANGED/);assert.equal(fixture.loads,2);
+ await owner.close();assert.equal(fixture.closed,1);
+ console.log('PASS same-owner metadata refresh wiring, unchanged grant, verified path pinning, Explicit preservation and orderly close; CONTROLLED ONLY.');
+}finally{globalThis.fetch=savedFetch;hooks.deregister();delete globalThis.__companionRefreshFixture;}

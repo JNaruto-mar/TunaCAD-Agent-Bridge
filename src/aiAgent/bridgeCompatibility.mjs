@@ -27,6 +27,10 @@ export const AGENT_BRIDGE_TIMING_POLICY = Object.freeze({
   interruptAcknowledgementTimeoutMs: 10_000,
   interruptCompletionTimeoutMs: 30_000,
   approvalTimeoutMs: 300_000,
+  // Existing Companion consent request is bounded to 125 s. Its ORIGINAL MCP
+  // call must outlive it; these are transport bounds, never solver/session limits.
+  simulationAuthorizationRequestTimeoutMs: 130_000,
+  mcpToolTimeoutSeconds: 150,
   loginCompletionTimeoutMs: 10 * 60_000,
   heartbeatIntervalMs: 15_000,
   staleConnectionMs: 45_000,

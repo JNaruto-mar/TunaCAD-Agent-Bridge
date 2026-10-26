@@ -59,7 +59,7 @@ export async function startCompanion({
       return send(204, {});
     }
     const route = request.url;
-    if (request.method === 'GET' && route === '/v1/discovery') return send(200, { protocol: COMPANION_PROTOCOL, companionVersion: '0.2.18', trusted: false });
+    if (request.method === 'GET' && route === '/v1/discovery') return send(200, { protocol: COMPANION_PROTOCOL, companionVersion: '0.2.19', trusted: false });
     if (request.method !== 'POST' || !['/v1/trust', '/v1/status', '/v1/connect', '/v1/disconnect', '/v1/forget', '/v1/refresh','/v1/simulation/authorize','/v1/simulation/resume','/v1/simulation/revoke'].includes(route)) return send(404, { error: 'Unknown Companion operation.' });
     if (!/^application\/json(?:;|$)/i.test(request.headers['content-type'] ?? '')) return send(415, { error: 'JSON required.' });
     try {
@@ -89,7 +89,7 @@ export async function startCompanion({
       nonces.set(nonce, now() + 60_000);
       const input = JSON.parse(payload);
       const signed = (result) => { const data = JSON.stringify(result); return send(200, { data, proof: companionMac(device.key, `${nonce}\n${data}`) }); };
-      if (route === '/v1/status') return signed({ companionVersion: '0.2.18', trusted: true, agents });
+      if (route === '/v1/status') return signed({ companionVersion: '0.2.19', trusted: true, agents });
       if(route.startsWith('/v1/simulation/')){
         if(typeof input.workspaceId!=='string'||!/^[A-Za-z0-9_.:-]{1,160}$/.test(input.workspaceId))throw Error('Invalid simulation workspace');
         const key=device.id+'|'+input.workspaceId,current=simulations.get(key);
@@ -119,7 +119,7 @@ export async function startCompanion({
       if (mutationBusy) return send(409, { error: 'Companion operation in progress.' });
       mutationBusy = true;
       try {
-        if (route === '/v1/refresh') { agents = await discover(); return signed({ companionVersion: '0.2.18', trusted: true, agents }); }
+        if (route === '/v1/refresh') { agents = await discover(); return signed({ companionVersion: '0.2.19', trusted: true, agents }); }
         if (route === '/v1/forget') {
           for(const [key,item] of [...simulations])if(item.deviceId===device.id){await item.grant.revoke();const state=await item.owner.close();if(state?.retainedJobs)throw Error('Save or intentionally cancel retained jobs before forgetting this device');simulations.delete(key);}
           trustStore.records.delete(device.id);
@@ -158,7 +158,10 @@ export async function startCompanion({
           return signed({ connected: true, authenticationRequired: started.status === 'authentication_required' });
         } catch (error) { await stopSession(input.sessionId); throw error; }
       } finally { mutationBusy = false; }
-    } catch { if (!response.writableEnded) send(400, { error: 'Companion operation failed. Check local setup and try again.' }); }
+    } catch(error) { if (!response.writableEnded) {
+      const code=['SIMULATION_SESSION_DECLINED','SIMULATION_SESSION_REVOKED_DURING_REVIEW','SIMULATION_SESSION_CLIENT_DENIED','SIMULATION_PROVIDER_CONFIGURATION_CHANGED'].includes(error?.message)?error.message:undefined;
+      send(400, { error: 'Companion operation failed. Check local setup and try again.',...(code?{code}:{}) });
+    } }
   });
   server.requestTimeout = 130_000;
   server.headersTimeout = 10_000;

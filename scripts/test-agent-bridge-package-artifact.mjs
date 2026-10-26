@@ -187,7 +187,7 @@ try {
   requireSuccess(cliFlags, 'Installed package CLI version/routing checks');
 
   console.log(
-    `[agent-bridge] Package artifact passed: ${metadata.files.length} files, ${metadata.size} bytes, ${metadata.integrity.slice(0, 28)}…`,
+    `[agent-bridge] Package artifact passed: ${metadata.files.length} files, ${metadata.size} bytes, ${metadata.integrity}`,
   );
   }
 } finally {

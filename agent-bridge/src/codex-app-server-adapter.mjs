@@ -362,6 +362,7 @@ export function createCodexLaunchArguments(mcpUrl) {
     '-c', `mcp_servers.tunacad.url=${url.toString()}`,
     '-c', `mcp_servers.tunacad.bearer_token_env_var=${TUNACAD_MCP_TOKEN_ENVIRONMENT_VARIABLE}`,
     '-c', 'mcp_servers.tunacad.required=true',
+    '-c', `mcp_servers.tunacad.tool_timeout_sec=${AGENT_BRIDGE_TIMING_POLICY.mcpToolTimeoutSeconds}`,
   ];
 }
 

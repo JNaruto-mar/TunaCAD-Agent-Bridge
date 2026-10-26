@@ -24,7 +24,7 @@ export async function createCompanionSimulationBridge({origin,grant,inspectPipel
  const {loadExternalPipeline}=await import(new URL('simulation-bridge/providers.mts',base));
  const {startSimulationBridge}=await import(new URL('simulation-bridge/server.mts',base));
  const settings=await(await openNativeProviderSettings()).readVerified(),paths=resolveConfiguredProviderPaths(settings.paths,process.env);
- const pipeline=await loadExternalPipeline(paths.gmshExecutable,paths.calculixExecutable,{discovery:false});
+ let pipeline=await loadExternalPipeline(paths.gmshExecutable,paths.calculixExecutable,{discovery:false});
  if(grant.scope.capabilities.includes('explicit_structural_dynamics')&&pipeline.readiness.meshing.runtimeVersion==='4.15.2'){
   const {openExplicitBridgeRuntime}=await import(new URL('providers/openradioss/ExplicitBridgeRuntime.mts',base));
   pipeline.providerExplicit=await openExplicitBridgeRuntime(paths.gmshExecutable);pipeline.readiness.explicit=pipeline.providerExplicit?.capabilities??null;
@@ -32,12 +32,23 @@ export async function createCompanionSimulationBridge({origin,grant,inspectPipel
  // Constructor-only qualification observer; never supplied by browser/MCP JSON.
  await inspectPipeline?.(pipeline);
  const owner=await startSimulationBridge({...pipeline,port:0,allowedOrigin:origin,trustedSimulationSession:grant,
+  // Existing authenticated readiness-test route; no new owner, consent or job.
+  // Never let a caller redirect this owner to another executable/configuration.
+  async configureProviders(requested){
+   const fresh=await(await openNativeProviderSettings()).readVerified(),current=resolveConfiguredProviderPaths(fresh.paths,process.env);
+   if(requested.gmshExecutable!==paths.gmshExecutable||requested.calculixExecutable!==paths.calculixExecutable||current.gmshExecutable!==paths.gmshExecutable||current.calculixExecutable!==paths.calculixExecutable)throw Error('SIMULATION_PROVIDER_CONFIGURATION_CHANGED');
+   const refreshed=await loadExternalPipeline(paths.gmshExecutable,paths.calculixExecutable,{discovery:false});
+   const previous=pipeline.readiness.electrostaticInitialization;
+   if(previous?.code)refreshed.readiness.electrostaticInitialization={...refreshed.readiness.electrostaticInitialization,previousFailure:{stage:previous.stage,code:previous.code,...(previous.probe?{probe:previous.probe}:{})}};
+   if(pipeline.providerExplicit){refreshed.providerExplicit=pipeline.providerExplicit;refreshed.readiness.explicit=pipeline.readiness.explicit;}
+   pipeline=refreshed;return refreshed;
+  },
   async approve(){throw Error('TRUSTED_SESSION_MUST_NOT_REQUEST_PER_STAGE_CONSENT');}});
  try{
   const challenge=randomBytes(32).toString('hex');
   const headers={Origin:origin,'Content-Type':'application/json','X-TunaCAD-Simulation-Workspace':grant.scope.workspaceId,'X-TunaCAD-Simulation-Client':'manual'};
   const response=await fetch(owner.url+'/v1/pair',{method:'POST',headers,body:JSON.stringify({challenge:challenge,proof:createHmac('sha256',owner.pairingCode).update('client:'+challenge).digest('hex')})});
   const pairing=await response.json();if(!response.ok||pairing.serverProof!==createHmac('sha256',owner.pairingCode).update('server:'+challenge+':'+pairing.sessionToken).digest('hex'))throw Error('SIMULATION_PAIRING_FAILED');
-  return {url:owner.url,sessionToken:pairing.sessionToken,expiresAt:pairing.expiresAt,readiness:pipeline.readiness,async close(){const state=await owner.endTrustedSession();if(!state.retainedJobs)await owner.close();return state;}};
+  return {url:owner.url,sessionToken:pairing.sessionToken,expiresAt:pairing.expiresAt,get readiness(){return pipeline.readiness;},async close(){const state=await owner.endTrustedSession();if(!state.retainedJobs)await owner.close();return state;}};
  }catch(error){await owner.close();throw error;}
 }
