@@ -59,7 +59,7 @@ export async function startCompanion({
       return send(204, {});
     }
     const route = request.url;
-    if (request.method === 'GET' && route === '/v1/discovery') return send(200, { protocol: COMPANION_PROTOCOL, companionVersion: '0.2.20', trusted: false });
+    if (request.method === 'GET' && route === '/v1/discovery') return send(200, { protocol: COMPANION_PROTOCOL, companionVersion: '0.2.21', trusted: false });
     if (request.method !== 'POST' || !['/v1/trust', '/v1/status', '/v1/connect', '/v1/disconnect', '/v1/forget', '/v1/refresh','/v1/simulation/authorize','/v1/simulation/resume','/v1/simulation/revoke'].includes(route)) return send(404, { error: 'Unknown Companion operation.' });
     if (!/^application\/json(?:;|$)/i.test(request.headers['content-type'] ?? '')) return send(415, { error: 'JSON required.' });
     try {
@@ -89,7 +89,7 @@ export async function startCompanion({
       nonces.set(nonce, now() + 60_000);
       const input = JSON.parse(payload);
       const signed = (result) => { const data = JSON.stringify(result); return send(200, { data, proof: companionMac(device.key, `${nonce}\n${data}`) }); };
-      if (route === '/v1/status') return signed({ companionVersion: '0.2.20', trusted: true, agents });
+      if (route === '/v1/status') return signed({ companionVersion: '0.2.21', trusted: true, agents });
       if(route.startsWith('/v1/simulation/')){
         if(typeof input.workspaceId!=='string'||!/^[A-Za-z0-9_.:-]{1,160}$/.test(input.workspaceId))throw Error('Invalid simulation workspace');
         const key=device.id+'|'+input.workspaceId,current=simulations.get(key);
@@ -119,7 +119,7 @@ export async function startCompanion({
       if (mutationBusy) return send(409, { error: 'Companion operation in progress.' });
       mutationBusy = true;
       try {
-        if (route === '/v1/refresh') { agents = await discover(); return signed({ companionVersion: '0.2.20', trusted: true, agents }); }
+        if (route === '/v1/refresh') { agents = await discover(); return signed({ companionVersion: '0.2.21', trusted: true, agents }); }
         if (route === '/v1/forget') {
           for(const [key,item] of [...simulations])if(item.deviceId===device.id){await item.grant.revoke();const state=await item.owner.close();if(state?.retainedJobs)throw Error('Save or intentionally cancel retained jobs before forgetting this device');simulations.delete(key);}
           trustStore.records.delete(device.id);
@@ -142,7 +142,8 @@ export async function startCompanion({
           fetchImpl: (url, options) => fetchImpl(url, { ...options, signal: AbortSignal.timeout(10_000) }) });
         if (new URL(pairing.mcpUrl).origin !== relayOrigin || new URL(pairing.bridgeWebSocketUrl).host !== new URL(relayOrigin).host
           || pairing.expiresAt <= now() || pairing.expiresAt > now() + 4 * 60 * 60_000 + 60_000) throw new Error('Invalid paired relay.');
-        const supervisor = supervisorFactory({ pairing, agentProvider: input.agent });
+        if(input.trustedAutomation!==undefined&&typeof input.trustedAutomation!=='boolean')return send(400,{error:'Invalid workspace automation choice.'});
+        const supervisor = supervisorFactory({ pairing:{...pairing,trustedAutomation:input.trustedAutomation===true}, agentProvider: input.agent });
         const entry = { supervisor, deviceId: device.id, browserToken: input.browserToken, origin, relayOrigin,agentProvider:input.agent };
         sessions.set(input.sessionId, entry);
         // Provider/relay errors can contain secrets; never log or serialize them.
@@ -155,7 +156,7 @@ export async function startCompanion({
           entry.heartbeat.unref();
           entry.expiry = setTimeout(() => { void stopSession(input.sessionId); }, pairing.expiresAt - now());
           entry.expiry.unref();
-          return signed({ connected: true, authenticationRequired: started.status === 'authentication_required' });
+          return signed({ connected: true, authenticationRequired: started.status === 'authentication_required',workspaceAutomation:input.trustedAutomation===true });
         } catch (error) { await stopSession(input.sessionId); throw error; }
       } finally { mutationBusy = false; }
     } catch(error) { if (!response.writableEnded) {

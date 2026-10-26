@@ -85,7 +85,7 @@ export class CodexAppServerAdapter extends EventEmitter {
         + `${versionCompatibility.testedMaximumVersion}. Required stable app-server features are compatible, `
         + 'so chat remains enabled.'
       : null;
-    const args = createCodexLaunchArguments(this.pairing.mcpUrl);
+    const args = createCodexLaunchArguments(this.pairing.mcpUrl,this.pairing.trustedAutomation===true);
     const env = {
       ...process.env,
       [TUNACAD_MCP_TOKEN_ENVIRONMENT_VARIABLE]: this.pairing.agentToken,
@@ -351,7 +351,7 @@ function formatSchemaIncompatibility(compatibility) {
   return missing.length ? `missing ${missing.join(', ')}` : 'schema probe reported an incompatible result';
 }
 
-export function createCodexLaunchArguments(mcpUrl) {
+export function createCodexLaunchArguments(mcpUrl,trustedAutomation=false) {
   const url = new URL(mcpUrl);
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname))) {
     throw new Error('The TunaCAD MCP URL must use HTTPS, except on loopback.');
@@ -363,6 +363,9 @@ export function createCodexLaunchArguments(mcpUrl) {
     '-c', `mcp_servers.tunacad.bearer_token_env_var=${TUNACAD_MCP_TOKEN_ENVIRONMENT_VARIABLE}`,
     '-c', 'mcp_servers.tunacad.required=true',
     '-c', `mcp_servers.tunacad.tool_timeout_sec=${AGENT_BRIDGE_TIMING_POLICY.mcpToolTimeoutSeconds}`,
+    // Process-scoped TunaCAD MCP permission only. Shell/filesystem/other MCP
+    // approval policy is unchanged; native consent is enforced inside the Bridge.
+    ...(trustedAutomation?['-c','mcp_servers.tunacad.default_tools_approval_mode="approve"']:[]),
   ];
 }
 
@@ -375,6 +378,7 @@ export function assertProcessScopedMcpConfig(configResult, pairing) {
     throw new Error('Codex did not apply the TunaCAD MCP bearer-token environment variable.');
   }
   if (tunacad?.required !== true) throw new Error('Codex did not mark the TunaCAD MCP server as required.');
+  if(pairing.trustedAutomation===true&&tunacad?.default_tools_approval_mode!=='approve')throw Error('Codex did not apply the user-authorized TunaCAD MCP permission scope.');
   if (JSON.stringify(tunacad).includes(pairing.agentToken)) {
     throw new Error('Codex effective configuration exposed the raw TunaCAD MCP credential.');
   }

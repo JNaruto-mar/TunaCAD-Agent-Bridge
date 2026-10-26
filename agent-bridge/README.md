@@ -27,6 +27,28 @@ open, TunaCAD detects it automatically after startup. **Allow** trusts the devic
 actions. In-scope simulation iterations reuse the authorized session without
 repeating per-stage confirmations.
 
+### Trusted workspace automation
+
+In AI Connect, explicitly select **Authorize trusted AI workspace automation**,
+then **Connect with workspace automation**. This consent covers CAD edits,
+material/domain configuration and result display in that authenticated workspace.
+Validated previews, source/revision checks, undo and numerical integrity remain
+enforced. Codex receives only a process-scoped TunaCAD MCP permission setting;
+shell, filesystem and other MCP permissions are unchanged. Claude and Gemini
+retain their existing TunaCAD-only tool policies and the same browser-owned CAD
+authorization. Device pairing alone never enables this option.
+
+Uncheck the option to revoke and disconnect AI automation. Accepted native jobs
+and archived numerical results remain owned by the existing simulation lifecycle.
+Native execution still requires genuine Windows **Authorize** for the bounded
+simulation scope; normal per-proposal CAD approval remains the fallback.
+
+Completed `cad_get_simulation_results` calls open TunaCAD's Results viewer
+directly (use `display:false` for inspection only). No browser-control or local
+process inspection is needed. A presentation error does not change successful
+native job status or remove numerical archives. File destinations may still need
+the operating system's genuine Save/Open picker.
+
 ## Install or update
 
 The 0.2.20 release candidate includes the canonical native Simulation Bridge,
